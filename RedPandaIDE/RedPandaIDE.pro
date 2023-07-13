@@ -8,7 +8,7 @@ isEmpty(APP_NAME) {
 }
 
 isEmpty(APP_VERSION) {
-    APP_VERSION = 2.20
+    APP_VERSION = 2.23
 }
 
 contains(QMAKE_HOST.arch, x86_64):{
@@ -454,6 +454,17 @@ unix: {
 linux: {
     LIBS+= \
     -lrt
+
+    _LINUX_STATIC_IME_PLUGIN = $$(LINUX_STATIC_IME_PLUGIN)
+    equals(_LINUX_STATIC_IME_PLUGIN, "ON") {
+        SOURCES += \
+            resources/linux_static_ime_plugin.cpp
+        QTPLUGIN.platforminputcontexts += \
+            composeplatforminputcontextplugin \
+            fcitx5platforminputcontextplugin \
+            ibusplatforminputcontextplugin
+        LIBS += -L$$[QT_INSTALL_PLUGINS]/platforminputcontexts
+    }
 }
 
 TRANSLATIONS += \
@@ -518,6 +529,10 @@ iconsets_files.files += $$files(resources/iconsets/*.json, true)
 
 theme_files.files += $$files(themes/*.json, false)
 theme_files.files += $$files(themes/*.png, false)
+
+windows: {
+    theme_files.files -= themes/system.json
+}
 
 colorscheme_files.files += $$files(colorschemes/*.scheme, false)
 colorscheme_files.prefix = /colorschemes

@@ -52,6 +52,10 @@ public:
     QString findFirstTemplateParamOf(const QString& fileName,
                                      const QString& phrase,
                                      const PStatement& currentScope);
+    QString findTemplateParamOf(const QString& fileName,
+                                     const QString& phrase,
+                                     int index,
+                                     const PStatement& currentScope);
     PStatement findFunctionAt(const QString& fileName,
                             int line);
     int findLastOperator(const QString& phrase) const;
@@ -72,6 +76,8 @@ public:
                                const QStringList& expression,
                                int line);
     PStatement findAliasedStatement(const PStatement& statement);
+
+    QList<PStatement> listTypeStatements(const QString& fileName,int line);
 
     /**
      * @brief evaluate the expression
@@ -196,6 +202,7 @@ private:
             const StatementScope& scope,
             const StatementAccessibility& classScope,
             StatementProperties properties);
+    void addMethodParameterStatement(QStringList words,int line, const PStatement& functionStatement);
     void setInheritance(int index, const PStatement& classStatement, bool isStruct);
     bool isCurrentScope(const QString& command) const;
     void addSoloScopeLevel(PStatement& statement, int line, bool shouldResetBlock=false); // adds new solo level
@@ -245,6 +252,8 @@ private:
                                const QStringList& expression,
                                int line) const;
     PStatement doFindAliasedStatement(const PStatement& statement) const;
+
+    QList<PStatement> doListTypeStatements(const QString& fileName,int line) const;
 
     PStatement doFindTypeDefinitionOf(const QString& fileName,
                                     const QString& aType,
@@ -351,6 +360,7 @@ private:
 
     PEvalStatement doCreateEvalNamespace(const PStatement& namespaceStatement) const;
 
+    PEvalStatement doCreateEvalType(const QString& fileName,const QString& typeName, const PStatement& parentScope) const;
     PEvalStatement doCreateEvalType(const QString& fileName,const PStatement& typeStatement) const;
     PEvalStatement doCreateEvalType(const QString& primitiveType) const;
 
@@ -526,7 +536,7 @@ private:
                 || ch == '_'
                 || ch == '*'
                 || ch == '&';
-    }
+    }    
 
     bool isIdentifier(const QChar& ch) const {
         return ch.isLetter()
@@ -643,7 +653,7 @@ private:
     int indexOfNextColon(int index);
     int indexOfNextLeftBrace(int index);
     int indexPassParenthesis(int index);
-    int indexPassBraces(int index);
+//    int indexPassBraces(int index);
     int skipAssignment(int index, int endIndex);
     void skipNextSemicolon(int index);
     int moveToEndOfStatement(int index, bool checkLambda, int endIndex=-1);

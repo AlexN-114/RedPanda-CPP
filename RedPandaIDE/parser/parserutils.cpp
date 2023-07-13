@@ -72,6 +72,8 @@ void initParser()
     CppKeywords.insert("explicit",KeywordType::SkipItself);
     CppKeywords.insert("export",KeywordType::SkipItself);
     CppKeywords.insert("false",KeywordType::SkipItself);
+    CppKeywords.insert("__extension__",KeywordType::SkipItself);
+
     //CppKeywords.insert("for",SkipType::skItself);
     CppKeywords.insert("mutable",KeywordType::SkipItself);
     CppKeywords.insert("noexcept",KeywordType::SkipItself);
@@ -125,8 +127,8 @@ void initParser()
     CppKeywords.insert("_Pragma",KeywordType::SkipNextParenthesis);
 
     // Skip to }
-    CppKeywords.insert("asm",KeywordType::MoveToRightBrace);
-    CppKeywords.insert("__asm",KeywordType::MoveToRightBrace);
+    CppKeywords.insert("asm",KeywordType::SkipNextParenthesis);
+    CppKeywords.insert("__asm",KeywordType::SkipNextParenthesis);
     // Skip to {
 
     // wont handle
@@ -301,8 +303,10 @@ void initParser()
     STLPointers.insert("std::shared_ptr");
     STLPointers.insert("std::weak_ptr");
     //STLPointers.insert("__gnu_cxx::__normal_iterator");
-    //STLPointers.insert("std::reverse_iterator");
-    //STLPointers.insert("std::iterator");
+//    STLPointers.insert("std::reverse_iterator");
+//    STLPointers.insert("std::iterator");
+//    STLPointers.insert("std::const_iterator");
+//    STLPointers.insert("std::const_reverse_iterator");
 
     AutoTypes.insert("auto");
     AutoTypes.insert("auto &");
@@ -712,3 +716,18 @@ bool isCppControlKeyword(const QString &word)
 //    counter--;
 //    qDebug()<<"statement deleted:"<<counter<<fullName<<kind<<extractFileName(fileName)<<line;
 //}
+
+bool isTypeKind(StatementKind kind)
+{
+    switch(kind) {
+    case StatementKind::skClass:
+    case StatementKind::skNamespace:
+    case StatementKind::skEnumType:
+    case StatementKind::skEnumClassType:
+    case StatementKind::skTypedef:
+    case StatementKind::skPreprocessor:
+        return true;
+    default:
+        return false;
+    }
+}

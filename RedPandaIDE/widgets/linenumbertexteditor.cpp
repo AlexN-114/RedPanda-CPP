@@ -61,6 +61,13 @@ void LineNumberTextEditor::updateLineNumberArea(const QRect &rect, int dy)
         updateLineNumberAreaWidth(0);
 }
 
+void LineNumberTextEditor::clearStartFormat()
+{
+    moveCursor(QTextCursor::Start);
+    QTextCursor cursor = textCursor();
+    cursor.setCharFormat(QTextCharFormat());
+}
+
 const QColor &LineNumberTextEditor::lineNumberAreaCurrentLine() const
 {
     return mLineNumberAreaCurrentLine;
@@ -72,6 +79,53 @@ void LineNumberTextEditor::setLineNumberAreaCurrentLine(const QColor &newLineNum
         return;
     mLineNumberAreaCurrentLine = newLineNumberAreaCurrentLine;
     emit lineNumberAreaCurrentLineChanged();
+}
+
+void LineNumberTextEditor::clearFormat()
+{
+    QTextCursor cursor = textCursor();
+    cursor.select(QTextCursor::Document);
+    cursor.setCharFormat(QTextCharFormat());
+    cursor.clearSelection();
+}
+
+void LineNumberTextEditor::clearAll()
+{
+    clear();
+    clearStartFormat();
+}
+
+void LineNumberTextEditor::highlightLine(int line, QColor highlightColor)
+{
+    QTextBlock block = document()->findBlockByLineNumber(line);
+    if (!block.isValid())
+        return;
+    QTextCursor cur(block);
+    if (cur.isNull())
+        return;
+    QTextCharFormat oldFormat = cur.charFormat();
+    QTextCharFormat format = QTextCharFormat(cur.charFormat());
+    cur.select(QTextCursor::LineUnderCursor);
+    format.setUnderlineColor(highlightColor);
+    format.setUnderlineStyle(QTextCharFormat::WaveUnderline);
+    format.setTextOutline(highlightColor);
+    cur.setCharFormat(format);
+    cur.clearSelection();
+    cur.setCharFormat(oldFormat);
+    setTextCursor(cur);
+    moveCursor(QTextCursor::MoveOperation::StartOfLine);
+}
+
+void LineNumberTextEditor::locateLine(int line)
+{
+    QTextBlock block = document()->findBlockByLineNumber(line);
+    if (!block.isValid())
+        return;
+    QTextCursor cur(block);
+    if (cur.isNull())
+        return;
+    setTextCursor(cur);
+    moveCursor(QTextCursor::MoveOperation::StartOfLine);
 }
 
 const QColor &LineNumberTextEditor::lineNumberAreaBackground() const

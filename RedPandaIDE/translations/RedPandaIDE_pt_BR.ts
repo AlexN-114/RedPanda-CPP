@@ -183,7 +183,7 @@
     </message>
     <message>
         <source>Disassemble</source>
-        <translation>Disassemble</translation>
+        <translation type="vanished">Disassemble</translation>
     </message>
     <message>
         <source>Step over one machine instruction</source>
@@ -204,6 +204,10 @@
     <message>
         <source>Blend Mode</source>
         <translation>Modo mesclado</translation>
+    </message>
+    <message>
+        <source>Callstack</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -301,6 +305,10 @@
     </message>
     <message>
         <source>C++</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Auto (follow system style and color)</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -757,11 +765,7 @@
     </message>
     <message>
         <source>MB</source>
-        <translation type="unfinished">MB</translation>
-    </message>
-    <message>
-        <source>Syntax error for stack frame larger than</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete">MB</translation>
     </message>
 </context>
 <context>
@@ -922,6 +926,13 @@
     </message>
     <message>
         <source>Columns</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>DebugReader</name>
+    <message>
+        <source>&lt;repeats \1 times&gt;</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -1956,6 +1967,10 @@
         <source>Form</source>
         <translation>Configuração</translation>
     </message>
+    <message>
+        <source>Keyword</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>ExecutableRunner</name>
@@ -2097,6 +2112,10 @@
         <source>Expected Output</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Redirect STDERR to Tools output panel</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>FileAssociationModel</name>
@@ -2214,6 +2233,10 @@
     <message>
         <source>OK</source>
         <translation>OK</translation>
+    </message>
+    <message>
+        <source>Characters:</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -5195,6 +5218,86 @@
         <source>You should recompile after change the compiler set or it&apos;s settings.</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Move Cursor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Page Up</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Page Down</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Line Start</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Line End</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto File Start</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto File End</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Page Up and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Page Down and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Page Start</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Page End</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Page Start and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Page End and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Line Start and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto Line End and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto File Start and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Goto File End and Select</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Close Others</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>OI Wiki</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turtle Graphics Tutorial</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>MemoryModel</name>
@@ -6243,7 +6346,7 @@
     </message>
     <message>
         <source>Assembler</source>
-        <translation>Assembler</translation>
+        <translation type="vanished">Assembler</translation>
     </message>
     <message>
         <source>Syntax</source>
@@ -7261,6 +7364,34 @@
         <source>Abort</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>*.*</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Filters:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>...</source>
+        <translation type="unfinished">...</translation>
+    </message>
+    <message>
+        <source>Folder:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Search in subfolders</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Folder</source>
+        <translation type="unfinished">Pasta</translation>
+    </message>
+    <message>
+        <source>Choose Folder</source>
+        <translation type="unfinished">Escolher pasta</translation>
+    </message>
 </context>
 <context>
     <name>SearchResultListModel</name>
@@ -7283,6 +7414,10 @@
     <message>
         <source>Find Usages in Project: &apos;%1&apos;</source>
         <translation>Procurar usos no projeto: &apos;%1&apos;</translation>
+    </message>
+    <message>
+        <source>&quot;%1&quot; in Folder &quot;%2&quot;</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>

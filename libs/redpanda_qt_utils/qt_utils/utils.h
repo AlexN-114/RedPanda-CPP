@@ -69,6 +69,7 @@ public:
 /* text processing utils */
 const QByteArray guessTextEncoding(const QByteArray& text);
 
+bool isBinaryContent(const QByteArray& text);
 bool isTextAllAscii(const QByteArray& text);
 bool isTextAllAscii(const QString& text);
 
@@ -84,6 +85,9 @@ QList<QByteArray> splitByteArrayToLines(const QByteArray& content);
 
 QString trimRight(const QString& s);
 QString trimLeft(const QString& s);
+
+class QTextEdit;
+void clearQPlainTextEditFormat(QTextEdit* editor);
 
 int countLeadingWhitespaceChars(const QString& line);
 

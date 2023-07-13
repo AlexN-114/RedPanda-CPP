@@ -857,7 +857,12 @@ void Editor::keyPressEvent(QKeyEvent *event)
                 } else {
                     QString lastWord = getPreviousWordAtPositionForSuggestion(caretXY());
                     if (mParser && !lastWord.isEmpty()) {
-                        if (lastWord == "using") {
+                        if (lastWord == "typedef" || lastWord == "const") {
+                            processCommand(QSynedit::EditCommand::Char,ch,nullptr);
+                            showCompletion(lastWord,false, CodeCompletionType::Types);
+                            handled=true;
+                            return;
+                        } else if (lastWord == "using") {
                             processCommand(QSynedit::EditCommand::Char,ch,nullptr);
                             showCompletion(lastWord,false, CodeCompletionType::ComplexKeyword);
                             handled=true;
@@ -1005,6 +1010,8 @@ void Editor::keyPressEvent(QKeyEvent *event)
         case ']':
         case '<':
         case '*':
+        case ';':
+        case ',':
             handled = handleSymbolCompletion(ch);
             return;
         case '(': {
@@ -1294,7 +1301,7 @@ void Editor::mouseReleaseEvent(QMouseEvent *event)
     // if ctrl+clicked
     if ((event->modifiers() == Qt::ControlModifier)
             && (event->button() == Qt::LeftButton)) {
-        if (!mCurrentWord.isEmpty()) {
+        if (!selAvail() && !mCurrentWord.isEmpty()) {
             QSynedit::BufferCoord p;
             if (mParser && pointToCharLine(event->pos(),p)) {
                 QString s = document()->getLine(p.line - 1);
@@ -2561,6 +2568,20 @@ bool Editor::handleSymbolCompletion(QChar key)
             return handleGlobalIncludeSkip();
         }
         return false;
+    case ';':
+        if (selAvail())
+            return false;
+        if (pSettings->editor().overwriteSymbols()) {
+            return handleSemiColonSkip();
+        }
+        return false;
+    case ',':
+        if (selAvail())
+            return false;
+        if (pSettings->editor().overwriteSymbols()) {
+            return handlePeriodSkip();
+        }
+        return false;
     }
     return false;
 }
@@ -2756,6 +2777,29 @@ bool Editor::handleBraceSkip()
         }
     }
     return false;
+}
+
+bool Editor::handleSemiColonSkip()
+{
+    if (getCurrentChar() != ';')
+        return false;
+    bool oldInsertMode = insertMode();
+    setInsertMode(false); //set mode to overwrite
+    processCommand(QSynedit::EditCommand::Char,';');
+    setInsertMode(oldInsertMode);
+    return true;
+}
+
+bool Editor::handlePeriodSkip()
+{
+    if (getCurrentChar() != ',')
+        return false;
+
+    bool oldInsertMode = insertMode();
+    setInsertMode(false); //set mode to overwrite
+    processCommand(QSynedit::EditCommand::Char,',');
+    setInsertMode(oldInsertMode);
+    return true;
 }
 
 bool Editor::handleSingleQuoteCompletion()
@@ -3915,6 +3959,7 @@ Editor::TipType Editor::getTipType(QPoint point, QSynedit::BufferCoord& pos)
 {
     // Only allow in the text area...
     if (pointToCharLine(point, pos) && syntaxer()) {
+        //qDebug()<<gutterWidth()<<charWidth()<<point.y()<<point.x()<<pos.line<<pos.ch;
         if (!pMainWindow->debugger()->executing()
                 && getSyntaxIssueAtPosition(pos)) {
             return TipType::Error;
@@ -5262,7 +5307,7 @@ void Editor::applyColorScheme(const QString& schemeName)
     item = pColorManager->getItem(schemeName,COLOR_SCHEME_GUTTER);
     if (item) {
         gutter().setTextColor(item->foreground());
-        gutter().setColor(item->background());
+        gutter().setColor(alphaBlend(palette().color(QPalette::Base), item->background()));
     }
     item = pColorManager->getItem(schemeName,COLOR_SCHEME_GUTTER_ACTIVE_LINE);
     if (item) {
@@ -5305,7 +5350,7 @@ void Editor::applyColorScheme(const QString& schemeName)
     item = pColorManager->getItem(schemeName,COLOR_SCHEME_TEXT);
     if (item) {
         this->setForegroundColor(item->foreground());
-        this->setBackgroundColor(item->background());
+        this->setBackgroundColor(alphaBlend(palette().color(QPalette::Base), item->background()));
     } else {
         this->setForegroundColor(palette().color(QPalette::Text));
         this->setBackgroundColor(palette().color(QPalette::Base));

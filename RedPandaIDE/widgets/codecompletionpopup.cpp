@@ -94,7 +94,11 @@ void CodeCompletionPopup::prepareSearch(
     mMemberOperator = memberOperator;
     switch(type) {
     case CodeCompletionType::ComplexKeyword:
-        getCompletionListForTypeKeywordComplex(preWord);
+        getCompletionListForComplexKeyword(preWord);
+        break;
+    case CodeCompletionType::Types:
+        mIncludedFiles = mParser->getFileIncludes(filename);
+        getCompletionListForTypes(preWord,filename,line);
         break;
     case CodeCompletionType::FunctionWithoutDefinition:
         mIncludedFiles = mParser->getFileIncludes(filename);
@@ -183,7 +187,10 @@ PStatement CodeCompletionPopup::selectedStatement()
         return PStatement();
 }
 
-void CodeCompletionPopup::addChildren(const PStatement& scopeStatement, const QString &fileName, int line)
+void CodeCompletionPopup::addChildren(const PStatement& scopeStatement,
+                                      const QString &fileName,
+                                      int line,
+                                      bool onlyTypes)
 {
     if (scopeStatement && !isIncluded(scopeStatement->fileName)
       && !isIncluded(scopeStatement->definitionFileName))
@@ -192,23 +199,49 @@ void CodeCompletionPopup::addChildren(const PStatement& scopeStatement, const QS
     if (children.isEmpty())
         return;
 
-    if (!scopeStatement) { //Global scope
-        for (const PStatement& childStatement: children) {
-            if (childStatement->fileName.isEmpty()) {
-                // hard defines
-                addStatement(childStatement,fileName,-1);
-            } else if (
-                       isIncluded(childStatement->fileName)
-                       || isIncluded(childStatement->definitionFileName)
-                       ) {
-                //we must check if the statement is included by the file
+    if (onlyTypes) {
+        if (!scopeStatement) { //Global scope
+            for (const PStatement& childStatement: children) {
+                if (!isTypeKind(childStatement->kind))
+                    continue;
+                if (childStatement->fileName.isEmpty()) {
+                    // hard defines
+                    addStatement(childStatement,fileName,-1);
+                } else if (
+                           isIncluded(childStatement->fileName)
+                           || isIncluded(childStatement->definitionFileName)
+                           ) {
+                    //we must check if the statement is included by the file
+                    addStatement(childStatement,fileName,line);
+                }
+            }
+        } else {
+            for (const PStatement& childStatement: children) {
+                if (!isTypeKind(childStatement->kind))
+                    continue;
                 addStatement(childStatement,fileName,line);
             }
         }
     } else {
-        for (const PStatement& childStatement: children) {
-            addStatement(childStatement,fileName,line);
+        if (!scopeStatement) { //Global scope
+            for (const PStatement& childStatement: children) {
+                if (childStatement->fileName.isEmpty()) {
+                    // hard defines
+                    addStatement(childStatement,fileName,-1);
+                } else if (
+                           isIncluded(childStatement->fileName)
+                           || isIncluded(childStatement->definitionFileName)
+                           ) {
+                    //we must check if the statement is included by the file
+                    addStatement(childStatement,fileName,line);
+                }
+            }
+        } else {
+            for (const PStatement& childStatement: children) {
+                addStatement(childStatement,fileName,line);
+            }
         }
+
     }
 }
 
@@ -557,6 +590,11 @@ void CodeCompletionPopup::getCompletionFor(
     if (memberOperator.isEmpty() && ownerExpression.isEmpty() && memberExpression.isEmpty())
         return;
 
+    bool isLambdaReturnType = (
+                memberOperator=="->"
+                && ownerExpression.startsWith("[")
+                && ownerExpression.endsWith(")"));
+
     if (memberOperator.isEmpty()) {
         //C++ preprocessor directives
         if (mMemberPhrase.startsWith('#')) {
@@ -602,6 +640,10 @@ void CodeCompletionPopup::getCompletionFor(
                 }
             }
         }
+    } else if  (isLambdaReturnType) {
+            foreach (const QString& keyword,CppTypeKeywords) {
+                addKeyword(keyword);
+            }
     }
 
     if (!mParser || !mParser->enabled())
@@ -614,15 +656,15 @@ void CodeCompletionPopup::getCompletionFor(
             mParser->unFreeze();
         });
 
-        if (memberOperator.isEmpty()) {
+        if (memberOperator.isEmpty() || isLambdaReturnType) {
             PStatement scopeStatement = mCurrentScope;
             // repeat until reach global
             while (scopeStatement) {
                 //add members of current scope that not added before
                 if (scopeStatement->kind == StatementKind::skClass) {
-                    addChildren(scopeStatement, fileName, -1);
+                    addChildren(scopeStatement, fileName, -1, isLambdaReturnType);
                 } else {
-                    addChildren(scopeStatement, fileName, line);
+                    addChildren(scopeStatement, fileName, line, isLambdaReturnType);
                 }
 
                 // add members of all usings (in current scope ) and not added before
@@ -632,14 +674,14 @@ void CodeCompletionPopup::getCompletionFor(
                     if (!namespaceStatementsList)
                         continue;
                     foreach (const PStatement& namespaceStatement,*namespaceStatementsList) {
-                        addChildren(namespaceStatement, fileName, line);
+                        addChildren(namespaceStatement, fileName, line, isLambdaReturnType);
                     }
                 }
                 scopeStatement=scopeStatement->parentScope.lock();
             }
 
             // add all global members and not added before
-            addChildren(nullptr, fileName, line);
+            addChildren(nullptr, fileName, line, isLambdaReturnType);
 
             // add members of all fusings
             mUsings = mParser->getFileUsings(fileName);
@@ -649,7 +691,7 @@ void CodeCompletionPopup::getCompletionFor(
                 if (!namespaceStatementsList)
                     continue;
                 foreach (const PStatement& namespaceStatement, *namespaceStatementsList) {
-                    addChildren(namespaceStatement, fileName, line);
+                    addChildren(namespaceStatement, fileName, line, isLambdaReturnType);
                 }
             }
 
@@ -714,11 +756,32 @@ void CodeCompletionPopup::getCompletionFor(
 
                 if (!classTypeStatement)
                     return;
-                //is a smart pointer
-                if (STLPointers.contains(classTypeStatement->fullName)
+                // It's a iterator
+                if (ownerStatement
+                        && ownerStatement->typeStatement
+                        && STLIterators.contains(ownerStatement->typeStatement->command)
+                        && (memberOperator == "->"
+                            || memberOperator == "->*")
+                ) {
+                    PStatement parentScope = ownerStatement->typeStatement->parentScope.lock();
+                    if (STLContainers.contains(parentScope->fullName)) {
+                        QString typeName=mParser->findFirstTemplateParamOf(fileName,ownerStatement->templateParams, parentScope);
+//                        qDebug()<<"typeName"<<typeName<<lastResult->baseStatement->type<<lastResult->baseStatement->command;
+                        classTypeStatement=mParser->findTypeDefinitionOf(fileName, typeName,parentScope);
+                        if (!classTypeStatement)
+                            return;
+                    } else if (STLMaps.contains(parentScope->fullName)) {
+                        QString typeName=mParser->findTemplateParamOf(fileName,ownerStatement->templateParams,1,parentScope);
+    //                        qDebug()<<"typeName"<<typeName<<lastResult->baseStatement->type<<lastResult->baseStatement->command;
+                        classTypeStatement=mParser->findTypeDefinitionOf(fileName, typeName,parentScope);
+                        if (!classTypeStatement)
+                            return;
+                    }
+                } else if (STLPointers.contains(classTypeStatement->fullName)
                    && (memberOperator == "->"
                        || memberOperator == "->*")
                         && ownerStatement->baseStatement) {
+                                   //is a smart pointer
                     QString typeName= mParser->findFirstTemplateParamOf(
                                 fileName,
                                 ownerStatement->baseStatement->type,
@@ -728,6 +791,12 @@ void CodeCompletionPopup::getCompletionFor(
                                 typeName,
                                 scope);
                     if (!classTypeStatement)
+                        return;
+                } else {
+                    //normal member access
+                    if (memberOperator=="." && ownerStatement->pointerLevel !=0)
+                        return;
+                    if (memberOperator=="->" && ownerStatement->pointerLevel!=1)
                         return;
                 }
                 if (!isIncluded(classTypeStatement->fileName) &&
@@ -827,7 +896,7 @@ void CodeCompletionPopup::getCompletionForFunctionWithoutDefinition(const QStrin
         });
 
         if (memberOperator.isEmpty()) {
-            getCompletionListForTypeKeywordComplex(preWord);
+            getCompletionListForComplexKeyword(preWord);
             PStatement scopeStatement = mCurrentScope;
             //add members of current scope that not added before
             while (scopeStatement && scopeStatement->kind!=StatementKind::skNamespace
@@ -895,7 +964,7 @@ void CodeCompletionPopup::getCompletionForFunctionWithoutDefinition(const QStrin
     }
 }
 
-void CodeCompletionPopup::getCompletionListForTypeKeywordComplex(const QString &preWord)
+void CodeCompletionPopup::getCompletionListForComplexKeyword(const QString &preWord)
 {
     mFullCompletionStatementList.clear();
     if (preWord == "long") {
@@ -943,6 +1012,39 @@ void CodeCompletionPopup::getCompletionListForNamespaces(const QString &/*preWor
                 }
             }
 
+        }
+    }
+}
+
+void CodeCompletionPopup::getCompletionListForTypes(const QString &preWord, const QString &fileName, int line)
+{
+    if (preWord=="typedef") {
+        addKeyword("const");
+        addKeyword("struct");
+        addKeyword("class");
+    }
+
+    if (mShowKeywords) {
+        //add keywords
+        foreach (const QString& keyword,CppTypeKeywords) {
+            addKeyword(keyword);
+        }
+    }
+    if (!mParser->enabled())
+        return;
+
+    if (!mParser->freeze())
+        return;
+    {
+        auto action = finally([this]{
+            mParser->unFreeze();
+        });
+        QList<PStatement> statements = mParser->listTypeStatements(fileName,line);
+        foreach(const PStatement& statement, statements) {
+            if (isIncluded(statement->fileName)
+                    || isIncluded(statement->definitionFileName)) {
+                addStatement(statement,fileName,line);
+            }
         }
     }
 }

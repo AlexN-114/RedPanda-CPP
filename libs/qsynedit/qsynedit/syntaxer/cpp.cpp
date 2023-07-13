@@ -154,9 +154,6 @@ const QSet<QString> CppSyntaxer::Keywords {
 };
 CppSyntaxer::CppSyntaxer(): Syntaxer()
 {
-    mAsmAttribute = std::make_shared<TokenAttribute>(SYNS_AttrAssembler,
-                                                           TokenType::Embeded);
-    addAttribute(mAsmAttribute);
     mCharAttribute = std::make_shared<TokenAttribute>(SYNS_AttrCharacter,
                                                             TokenType::Character);
     addAttribute(mCharAttribute);
@@ -199,11 +196,6 @@ CppSyntaxer::CppSyntaxer(): Syntaxer()
                                                                 TokenType::Identifier);
     addAttribute(mVariableAttribute);
     resetState();
-}
-
-const PTokenAttribute &CppSyntaxer::asmAttribute() const
-{
-    return mAsmAttribute;
 }
 
 const PTokenAttribute &CppSyntaxer::preprocessorAttribute() const
@@ -273,13 +265,7 @@ const PTokenAttribute &CppSyntaxer::localVarAttribute() const
 
 CppSyntaxer::TokenId CppSyntaxer::getTokenId()
 {
-    if ((mRange.state == RangeState::rsAsm || mRange.state == RangeState::rsAsmBlock)
-            && !mAsmStart && !(mTokenId == TokenId::Comment || mTokenId == TokenId::Space
-                               || mTokenId == TokenId::Null)) {
-        return TokenId::Asm;
-    } else {
-        return mTokenId;
-    }
+    return mTokenId;
 }
 
 void CppSyntaxer::procAndSymbol()
@@ -334,11 +320,7 @@ void CppSyntaxer::procAnsiCStyleComment()
         case '*':
             if (mRun+1<mLineSize && mLine[mRun+1] == '/') {
                 mRun += 2;
-                if (mRange.state == RangeState::rsAnsiCAsm) {
-                    mRange.state = RangeState::rsAsm;
-                } else if (mRange.state == RangeState::rsAnsiCAsmBlock){
-                    mRange.state = RangeState::rsAsmBlock;
-                } else if (mRange.state == RangeState::rsDirectiveComment &&
+                if (mRange.state == RangeState::rsDirectiveComment &&
                             mRun<mLineSize && mLine[mRun]!='\r' && mLine[mRun]!='\n') {
                     mRange.state = RangeState::rsMultiLineDirective;
                 } else {
@@ -376,9 +358,7 @@ void CppSyntaxer::procBraceClose()
 {
     mRun += 1;
     mTokenId = TokenId::Symbol;
-    if (mRange.state == RangeState::rsAsmBlock) {
-        mRange.state = rsUnknown;
-    } else if (mRange.state == RangeState::rsDefineRemaining)
+    if (mRange.state == RangeState::rsDefineRemaining)
         return;
 
     mRange.braceLevel -= 1;
@@ -399,10 +379,7 @@ void CppSyntaxer::procBraceOpen()
 {
     mRun += 1;
     mTokenId = TokenId::Symbol;
-    if (mRange.state == RangeState::rsAsm) {
-        mRange.state = RangeState::rsAsmBlock;
-        mAsmStart = true;
-    } else if (mRange.state == RangeState::rsDefineRemaining)
+    if (mRange.state == RangeState::rsDefineRemaining)
         return;
 
     mRange.braceLevel += 1;
@@ -490,7 +467,11 @@ void CppSyntaxer::procDefineIdent()
 
     while(mRun < mLineSize && isIdentChar(mLine[mRun]))
         mRun++;
-    mRange.state = RangeState::rsDefineRemaining;
+
+    if (mRun<mLineSize)
+        mRange.state = RangeState::rsDefineRemaining;
+    else
+        mRange.state = RangeState::rsUnknown;
 }
 
 void CppSyntaxer::procDefineRemaining()
@@ -577,12 +558,14 @@ void CppSyntaxer::procGreater()
         switch (mLine[mRun+1].unicode()) {
         case '=':
             mRun += 2;
+            if (mRun<mLineSize && mLine[mRun]=='>') // C++20 <=>
+                mRun++;
             return;
         case '>':
-            if (mRun+2<mLineSize && mLine[mRun+2] == '=') {
+            if (mRun+2<mLineSize && mLine[mRun+2] == '=') { // >>=
                 mRun+=3;
             } else {
-                mRun += 2;
+                mRun += 2; // >>
             }
             return;
         }
@@ -950,30 +933,30 @@ void CppSyntaxer::procQuestion()
 
 void CppSyntaxer::procRawString()
 {
-    bool noEscaping = false;
     mTokenId = TokenId::RawString;
-
     while (mRun<mLineSize) {
-        if (!noEscaping && (mLine[mRun]=='"')) {
+        if (mRange.state!=RangeState::rsRawStringNotEscaping && (mLine[mRun]=='"')) {
+            mRange.state = RangeState::rsUnknown;
             mRun+=1;
-            break;
+            return;
         }
         switch (mLine[mRun].unicode()) {
         case ' ':
         case '\t':
             return;
         case '(':
-            if (!noEscaping)
-                noEscaping = true;
+            if (mRange.state==RangeState::rsRawString)
+                mRange.state = RangeState::rsRawStringNotEscaping;
             break;
         case ')':
-            if (noEscaping)
-                noEscaping = false;
+            if (mRange.state == RangeState::rsRawStringNotEscaping)
+                mRange.state = RangeState::rsRawStringEnd;
             break;
         }
         mRun+=1;
     }
-    mRange.state = RangeState::rsUnknown;
+    if (mRun>=mLineSize && mRange.state != RangeState::rsRawStringNotEscaping)
+        mRange.state = RangeState::rsUnknown;
 }
 
 void CppSyntaxer::procRoundClose()
@@ -998,8 +981,6 @@ void CppSyntaxer::procSemiColon()
 {
     mRun += 1;
     mTokenId = TokenId::Symbol;
-    if (mRange.state == RangeState::rsAsm)
-        mRange.state = RangeState::rsUnknown;
     while (mRange.getLastIndentType() == IndentType::Statement) {
         popIndents(IndentType::Statement);
     }
@@ -1019,11 +1000,7 @@ void CppSyntaxer::procSlash()
             return;
         case '*': // C style comment
             mTokenId = TokenId::Comment;
-            if (mRange.state == RangeState::rsAsm) {
-                mRange.state = RangeState::rsAnsiCAsm;
-            } else if (mRange.state == RangeState::rsAsmBlock) {
-                mRange.state = RangeState::rsAnsiCAsmBlock;
-            } else if (mRange.state == RangeState::rsDirective) {
+            if (mRange.state == RangeState::rsDirective) {
                 mRange.state = RangeState::rsDirectiveComment;
             } else {
                 mRange.state = RangeState::rsAnsiC;
@@ -1060,7 +1037,8 @@ void CppSyntaxer::procSpace()
         mRun+=1;
     if (mRun>=mLineSize) {
         mRange.hasTrailingSpaces = true;
-        if (mRange.state==RangeState::rsCppComment)
+        if (mRange.state==RangeState::rsCppComment
+                || mRange.state == RangeState::rsDefineRemaining)
             mRange.state = RangeState::rsUnknown;
     }
 }
@@ -1484,8 +1462,6 @@ bool CppSyntaxer::getTokenFinished() const
 bool CppSyntaxer::isLastLineCommentNotFinished(int state) const
 {
     return (state == RangeState::rsAnsiC ||
-            state == RangeState::rsAnsiCAsm ||
-            state == RangeState::rsAnsiCAsmBlock ||
             state == RangeState::rsDirectiveComment||
             state == RangeState::rsCppComment);
 }
@@ -1508,8 +1484,6 @@ QString CppSyntaxer::getToken() const
 const PTokenAttribute &CppSyntaxer::getTokenAttribute() const
 {
     switch (mTokenId) {
-    case TokenId::Asm:
-        return mAsmAttribute;
     case TokenId::Comment:
         return mCommentAttribute;
     case TokenId::Directive:
@@ -1555,17 +1529,20 @@ int CppSyntaxer::getTokenPos()
 
 void CppSyntaxer::next()
 {
-    mAsmStart = false;
     mTokenPos = mRun;
+    if (mLineSize == 0 && mRange.state == RangeState::rsString)
+        mRange.state=RangeState::rsUnknown;
     do {
+        if (mRun>=mLineSize) {
+            procNull();
+            break;
+        }
         if (mRun<mLineSize && isSpaceChar(mLine[mRun])) {
             procSpace();
             break;
         }
         switch (mRange.state) {
         case RangeState::rsAnsiC:
-        case RangeState::rsAnsiCAsm:
-        case RangeState::rsAnsiCAsmBlock:
         case RangeState::rsDirectiveComment:
             //qDebug()<<"*0-0-0*";
             procAnsiCStyleComment();
@@ -1610,6 +1587,12 @@ void CppSyntaxer::next()
             //qDebug()<<"*9-0-0*";
             procDefineRemaining();
             break;
+        case RangeState::rsRawStringNotEscaping:
+        case RangeState::rsRawString:
+        case RangeState::rsRawStringEnd:
+            //qDebug()<<"*9-0-0*";
+            procRawString();
+            break;
         default:
             //qDebug()<<"*a-0-0*";
             mRange.state = RangeState::rsUnknown;
@@ -1619,6 +1602,7 @@ void CppSyntaxer::next()
             } else if (mRun+1<mLineSize && mLine[mRun] == 'R' && mLine[mRun+1] == '"') {
                 //qDebug()<<"*c-0-0*";
                 mRun+=2;
+                mRange.state = RangeState::rsRawString;
                 procRawString();
             } else if (mRun+1<mLineSize && (mLine[mRun] == 'L' || mLine[mRun] == 'u' || mLine[mRun]=='U') && mLine[mRun+1]=='\"') {
                 //qDebug()<<"*d-0-0*";
@@ -1680,7 +1664,6 @@ void CppSyntaxer::resetState()
     mRange.indents.clear();
     mRange.lastUnindent=IndentInfo{IndentType::None,0};
     mRange.hasTrailingSpaces = false;
-    mAsmStart = false;
 }
 
 QString CppSyntaxer::languageName()

@@ -226,11 +226,17 @@ void BookmarkModel::save(const QString &filename, const QString& projectFolder)
         QString key = QString("%1-%2").arg(filename).arg(bookmark->line);
         compareHash.insert(key,i);
     }
-    QList<PBookmark> fileBookmarks=load(filename, t,&fileTimestamp);
+    QList<PBookmark> fileBookmarks;
+    try {
+        fileBookmarks=load(filename, t,&fileTimestamp);
+    } catch (FileError& e) {
+
+    }
+
     QFile file(filename);
     if (file.open(QFile::WriteOnly | QFile::Truncate)) {        
 
-        QList<PBookmark> saveBookmarks;
+//        QList<PBookmark> saveBookmarks;
 
         QDir dir(projectFolder);
         foreach (const PBookmark& bookmark, fileBookmarks) {
@@ -301,7 +307,9 @@ QList<PBookmark> BookmarkModel::load(const QString& filename, qint64 criteriaTim
     if (!file.exists())
         return bookmarks;
     if (file.open(QFile::ReadOnly)) {
-        QByteArray content = file.readAll();
+        QByteArray content = file.readAll().trimmed();
+        if (content.isEmpty())
+            return bookmarks;
         QJsonParseError error;
         QJsonDocument doc(QJsonDocument::fromJson(content,&error));
         if (error.error  != QJsonParseError::NoError) {

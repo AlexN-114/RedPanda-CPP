@@ -21,7 +21,7 @@
 #include "settings.h"
 #include "widgets/cpudialog.h"
 #include "systemconsts.h"
-
+#include "editorlist.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
@@ -85,6 +85,27 @@ bool Debugger::start(int compilerSetIndex, const QString& inferior, const QStrin
         return false;
     }
     setForceUTF8(CompilerInfoManager::forceUTF8InDebugger(compilerSet->compilerType()));
+    setDebugInfosUsingUTF8(false);
+#ifdef Q_OS_WIN
+
+    bool isOk;
+    int productVersion = QSysInfo::productVersion().toInt(&isOk);
+//    qDebug()<<productVersion<<isOk;
+    if (!isOk) {
+        if (QSysInfo::productVersion().startsWith("7"))
+            productVersion=7;
+        else if (QSysInfo::productVersion().startsWith("10"))
+            productVersion=10;
+        else if (QSysInfo::productVersion().startsWith("11"))
+            productVersion=11;
+        else
+            productVersion=10;
+    }
+
+    if (compilerSet->mainVersion()>=13 && compilerSet->compilerType()==CompilerType::GCC
+            && productVersion>=10)
+        setDebugInfosUsingUTF8(true);
+#endif
     if (compilerSet->debugger().endsWith(LLDB_MI_PROGRAM))
         setDebuggerType(DebuggerType::LLDB_MI);
     else
@@ -560,6 +581,16 @@ void Debugger::fetchVarChildren(const QString &varName)
     }
 }
 
+bool Debugger::debugInfosUsingUTF8() const
+{
+    return mDebugInfosUsingUTF8;
+}
+
+void Debugger::setDebugInfosUsingUTF8(bool newDebugInfosUsingUTF8)
+{
+    mDebugInfosUsingUTF8 = newDebugInfosUsingUTF8;
+}
+
 DebuggerType Debugger::debuggerType() const
 {
     return mDebuggerType;
@@ -745,7 +776,13 @@ void Debugger::save(const QString &filename, const QString& projectFolder)
     foreach (const PWatchVar& watchVar, watchVars) {
         watchVarCompareSet.insert(watchVar->expression);
     }
-    std::shared_ptr<DebugConfig> pConfig = load(filename, forProject);
+    std::shared_ptr<DebugConfig> pConfig;
+    try {
+        pConfig = load(filename, forProject);
+    } catch (FileError& e) {
+
+    }
+
     QFile file(filename);
     if (file.open(QFile::WriteOnly | QFile::Truncate)) {
         foreach (const PBreakpoint& breakpoint, pConfig->breakpoints) {
@@ -803,8 +840,10 @@ PDebugConfig Debugger::load(const QString &filename, bool forProject)
     if (!file.exists())
         return pConfig;
     if (file.open(QFile::ReadOnly)) {
-        QByteArray content = file.readAll();
-        QJsonParseError error;
+        QByteArray content = file.readAll().trimmed();
+        if (content.isEmpty())
+            return pConfig;
+        QJsonParseError error;        
         QJsonDocument doc(QJsonDocument::fromJson(content,&error));
         if (error.error  != QJsonParseError::NoError) {
             throw FileError(tr("Error in json file '%1':%2 : %3")
@@ -1087,6 +1126,20 @@ void DebugReader::processConsoleOutput(const QByteArray& line)
     }
 }
 
+void DebugReader::processLogOutput(const QByteArray &line)
+{
+    if (mDebugger->debugInfosUsingUTF8() && line.endsWith(": No such file or directory.\n\"")) {
+        QByteArray newLine = line;
+        newLine[0]='~';
+        int p=newLine.lastIndexOf(':');
+        if (p>0) {
+            newLine=newLine.left(p);
+            qDebug()<<newLine;
+            processConsoleOutput(newLine);
+        }
+    }
+}
+
 void DebugReader::processResult(const QByteArray &result)
 {
     GDBMIResultParser parser;
@@ -1224,6 +1277,7 @@ void DebugReader::processError(const QByteArray &errorLine)
         return;
     }
 }
+static QRegularExpression reGdbSourceLine("^(\\d)+\\s+in\\s+(.+)$");
 
 void DebugReader::processResultRecord(const QByteArray &line)
 {
@@ -1248,6 +1302,36 @@ void DebugReader::processResultRecord(const QByteArray &line)
                     disOutput.pop_back();
                     disOutput.pop_front();
                     disOutput.pop_front();
+                }
+                if (mDebugger->debugInfosUsingUTF8()) {
+                    QStringList newOutput;
+                    foreach(const QString& s, disOutput) {
+                        QString line = s;
+                        if (!s.isEmpty() && s.front().isDigit()) {
+                            QRegularExpressionMatch match = reGdbSourceLine.match(s);
+//                            qDebug()<<s;
+                            if (match.hasMatch()) {
+                                bool isOk;
+                                int lineno=match.captured(1).toInt(&isOk)-1;;
+                                QString filename = match.captured(2).trimmed();
+                                if (isOk && fileExists(filename)) {
+                                    QStringList contents;
+                                    if (mFileCache.contains(filename))
+                                        contents = mFileCache.value(filename);
+                                    else {
+                                        if (!pMainWindow->editorList()->getContentFromOpenedEditor(filename,contents))
+                                            contents = readFileToLines(filename);
+                                        mFileCache[filename]=contents;
+                                    }
+                                    if (lineno>=0 && lineno<contents.size()) {
+                                        line = QString("%1\t%2").arg(lineno+1).arg(contents[lineno]);
+                                    }
+                                }
+                            }
+                        }
+                        newOutput.append(line);
+                    }
+                    disOutput=newOutput;
                 }
                 emit disassemblyUpdate(mCurrentFile,mCurrentFunc, disOutput);
             }
@@ -1288,7 +1372,9 @@ void DebugReader::processDebugOutput(const QByteArray& debugOutput)
              processConsoleOutput(line);
              break;
          case '@': // target stream output
+             break;
          case '&': // log stream output
+             processLogOutput(line);
              break;
          case '^': // result record
              processResultRecord(line);
@@ -1347,6 +1433,13 @@ void DebugReader::runNextCmd()
 
     //clang compatibility
     if (mDebugger->forceUTF8()) {
+        params = pCmd->params.toUtf8();
+    } else if (mDebugger->debugInfosUsingUTF8() &&
+               (pCmd->command=="-break-insert"
+                || pCmd->command=="-var-create"
+                || pCmd->command=="-data-read-memory"
+                || pCmd->command=="-data-evaluate-expression"
+                )) {
         params = pCmd->params.toUtf8();
     }
     if (pCmd->command == "-var-create") {
@@ -1485,7 +1578,7 @@ void DebugReader::handleBreakpoint(const GDBMIResultParser::ParseObject& breakpo
 {
     QString filename;
     // gdb use system encoding for file path
-    if (mDebugger->forceUTF8())
+    if (mDebugger->forceUTF8() || mDebugger->debugInfosUsingUTF8())
         filename = breakpoint["fullname"].utf8PathValue();
     else
         filename = breakpoint["fullname"].pathValue();
@@ -1503,7 +1596,8 @@ void DebugReader::handleFrame(const GDBMIResultParser::ParseValue &frame)
         if (!ok)
             mCurrentAddress=0;
         mCurrentLine = frameObj["line"].intValue();
-        if (mDebugger->forceUTF8())
+        if (mDebugger->forceUTF8()
+                || mDebugger->debugInfosUsingUTF8())
             mCurrentFile = frameObj["fullname"].utf8PathValue();
         else
             mCurrentFile = frameObj["fullname"].pathValue();
@@ -1518,7 +1612,7 @@ void DebugReader::handleStack(const QList<GDBMIResultParser::ParseValue> & stack
         GDBMIResultParser::ParseObject frameObject = frameValue.object();
         PTrace trace = std::make_shared<Trace>();
         trace->funcname = frameObject["func"].value();
-        if (mDebugger->forceUTF8())
+        if (mDebugger->forceUTF8() || mDebugger->debugInfosUsingUTF8())
             trace->filename = frameObject["fullname"].utf8PathValue();
         else
             trace->filename = frameObject["fullname"].pathValue();
@@ -1532,13 +1626,16 @@ void DebugReader::handleStack(const QList<GDBMIResultParser::ParseValue> & stack
 void DebugReader::handleLocalVariables(const QList<GDBMIResultParser::ParseValue> &variables)
 {
     QStringList locals;
+    QRegularExpression exp("<repeats\\s+(\\d+)\\s+times>");
     foreach (const GDBMIResultParser::ParseValue& varValue, variables) {
         GDBMIResultParser::ParseObject varObject = varValue.object();
+        QString name = QString(varObject["name"].value());
+        QString value = QString(varObject["value"].value()).replace(exp, tr("<repeats \\1 times>"));
         locals.append(
                     QString("%1 = %2")
                     .arg(
-                        QString(varObject["name"].value()),
-                        QString(varObject["value"].value())
+                        name,
+                        value
                 ));
     }
     emit localsUpdated(locals);

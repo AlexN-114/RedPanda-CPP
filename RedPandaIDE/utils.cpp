@@ -145,11 +145,23 @@ FileType getFileType(const QString &filename)
     if (filename.endsWith(".txt",PATH_SENSITIVITY)) {
         return FileType::Text;
     }
+    if (filename.endsWith(".md",PATH_SENSITIVITY)) {
+        return FileType::Text;
+    }
+    if (filename.endsWith(".info",PATH_SENSITIVITY)) {
+        return FileType::Text;
+    }
     if (filename.endsWith(".dat",PATH_SENSITIVITY)) {
         return FileType::Text;
     }
     if (filename.endsWith(".lua",PATH_SENSITIVITY)) {
         return FileType::LUA;
+    }
+    if (filename.endsWith(".fs",PATH_SENSITIVITY)) {
+        return FileType::FragmentShader;
+    }
+    if (filename.endsWith(".vs",PATH_SENSITIVITY)) {
+        return FileType::VerticeShader;
     }
     QFileInfo info(filename);
     if (info.suffix().isEmpty()) {
@@ -325,8 +337,8 @@ void resetCppParser(std::shared_ptr<CppParser> parser, int compilerSetIndex)
         for (QString define:compilerSet->defines(parser->language()==ParserLanguage::CPlusPlus)) {
             parser->addHardDefineByLine(define);
         }
-        // add a Red Pand C++ 's own macro
-        parser->addHardDefineByLine("#define EGE_FOR_AUTO_CODE_COMPLETETION_ONLY");
+//        // add a Red Pand C++ 's own macro
+//        parser->addHardDefineByLine("#define EGE_FOR_AUTO_CODE_COMPLETETION_ONLY");
         // add C/C++ default macro
         parser->addHardDefineByLine("#define __FILE__  1");
         parser->addHardDefineByLine("#define __LINE__  1");
@@ -523,7 +535,7 @@ QString getSizeString(int size)
     if (size < 1024) {
         return QString("%1 ").arg(size)+QObject::tr("bytes");
     } else if (size < 1024 * 1024) {
-        return QString("%1 ").arg(size / 1024.0)+QObject::tr("KB");
+        return QString("%1 ").arg(size / 1024.0,0,'f',2)+QObject::tr("KB");
     } else if (size < 1024 * 1024 * 1024) {
         return QString("%1 ").arg(size / 1024.0 / 1024.0)+QObject::tr("MB");
     } else {
@@ -566,4 +578,14 @@ void openFileFolderInExplorer(const QString &path)
                          includeTrailingPathDelimiter(path),QUrl::TolerantMode));
     }
 
+}
+
+QColor alphaBlend(const QColor &lower, const QColor &upper) {
+    qreal wu = upper.alphaF(); // weight of upper color
+    qreal wl = 1 - wu;         // weight of lower color
+    return QColor(
+        int(lower.red() * wl + upper.red() * wu),
+        int(lower.green() * wl + upper.green() * wu),
+        int(lower.blue() * wl + upper.blue() * wu)
+        );
 }

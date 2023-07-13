@@ -131,6 +131,7 @@ const string ASResource::AS_GR_GR_GR = string(">>>");
 const string ASResource::AS_LS_EQUAL = string("<=");
 const string ASResource::AS_LS_LS = string("<<");
 const string ASResource::AS_LS_LS_LS = string("<<<");
+const string ASResource::AS_THREEWAY_COMPARISION = string("<=>");
 const string ASResource::AS_QUESTION_QUESTION = string("??");
 const string ASResource::AS_LAMBDA = string("=>");            // C# lambda expression arrow
 const string ASResource::AS_ARROW = string("->");
@@ -239,8 +240,8 @@ void ASResource::buildCastOperators(vector<const string*>* castOperators)
  */
 void ASResource::buildHeaders(vector<const string*>* headers, int fileType, bool beautifier)
 {
-	const size_t elements = 25;
-	headers->reserve(elements);
+    const size_t elements = 25;
+    headers->reserve(elements);
 
 	headers->emplace_back(&AS_IF);
 	headers->emplace_back(&AS_ELSE);
@@ -261,7 +262,7 @@ void ASResource::buildHeaders(vector<const string*>* headers, int fileType, bool
 	{
 		headers->emplace_back(&_AS_TRY);		// __try
 		headers->emplace_back(&_AS_FINALLY);	// __finally
-		headers->emplace_back(&_AS_EXCEPT);	// __except
+        headers->emplace_back(&_AS_EXCEPT);	// __except
 	}
 	if (fileType == JAVA_TYPE)
 	{
@@ -294,7 +295,7 @@ void ASResource::buildHeaders(vector<const string*>* headers, int fileType, bool
 		}
 	}
 
-	assert(headers->size() < elements);
+    assert(headers->size() < elements);
     sort(headers->begin(), headers->end(), sortOnName);
 }
 
@@ -350,8 +351,8 @@ void ASResource::buildIndentableMacros(vector<const pair<const string, const str
  */
 void ASResource::buildNonAssignmentOperators(vector<const string*>* nonAssignmentOperators)
 {
-	const size_t elements = 15;
-	nonAssignmentOperators->reserve(elements);
+//    const size_t elements = 16;
+//	nonAssignmentOperators->reserve(elements);
 
 	nonAssignmentOperators->emplace_back(&AS_EQUAL);
 	nonAssignmentOperators->emplace_back(&AS_PLUS_PLUS);
@@ -367,8 +368,9 @@ void ASResource::buildNonAssignmentOperators(vector<const string*>* nonAssignmen
 	nonAssignmentOperators->emplace_back(&AS_AND);
 	nonAssignmentOperators->emplace_back(&AS_OR);
 	nonAssignmentOperators->emplace_back(&AS_LAMBDA);
+    nonAssignmentOperators->emplace_back(&AS_THREEWAY_COMPARISION);
 
-	assert(nonAssignmentOperators->size() < elements);
+//	assert(nonAssignmentOperators->size() < elements);
     sort(nonAssignmentOperators->begin(), nonAssignmentOperators->end(), sortOnLength);
 }
 
@@ -463,6 +465,8 @@ void ASResource::buildOperators(vector<const string*>* operators, int fileType)
 	operators->emplace_back(&AS_LS_LS);
 	operators->emplace_back(&AS_QUESTION_QUESTION);
 	operators->emplace_back(&AS_LAMBDA);
+    operators->emplace_back(&AS_THREEWAY_COMPARISION);
+
 	operators->emplace_back(&AS_ARROW);
 	operators->emplace_back(&AS_AND);
 	operators->emplace_back(&AS_OR);

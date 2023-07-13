@@ -45,13 +45,16 @@ enum class FileType{
     WindowsResourceSource, // resource source (.res)
     Project, //Red Panda C++ Project (.dev)
     Text, // text file
+    FragmentShader,
+    VerticeShader,
     Other // any others
 };
 
 enum class SearchFileScope {
     currentFile,
     wholeProject,
-    openedFiles
+    openedFiles,
+    Folder
 };
 
 enum AutoSaveTarget {
@@ -154,5 +157,6 @@ QString getSizeString(int size);
 class QComboBox;
 void saveComboHistory(QComboBox* cb,const QString& text);
 
+QColor alphaBlend(const QColor &lower, const QColor &upper);
 
 #endif // UTILS_H

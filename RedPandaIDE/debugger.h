@@ -372,6 +372,9 @@ public:
     DebuggerType debuggerType() const;
     void setDebuggerType(DebuggerType newDebuggerType);
 
+    bool debugInfosUsingUTF8() const;
+    void setDebugInfosUsingUTF8(bool newDebugInfosUsingUTF8);
+
 signals:
     void evalValueReady(const QString& s);
     void memoryExamineReady(const QStringList& s);
@@ -414,6 +417,7 @@ private:
     DebugReader *mReader;
     DebugTarget *mTarget;
     bool mForceUTF8;
+    bool mDebugInfosUsingUTF8;
     DebuggerType mDebuggerType;
     int mLeftPageIndexBackup;
     qint64 mLastLoadtime;
@@ -567,6 +571,7 @@ private:
     void handleListVarChildren(const GDBMIResultParser::ParseObject& multiVars);
     void handleUpdateVarValue(const QList<GDBMIResultParser::ParseValue> &changes);
     void processConsoleOutput(const QByteArray& line);
+    void processLogOutput(const QByteArray& line);
     void processResult(const QByteArray& result);
     void processExecAsyncRecord(const QByteArray& line);
     void processError(const QByteArray& errorLine);
@@ -593,6 +598,7 @@ private:
     PDebugCommand mCurrentCmd;
     std::shared_ptr<QProcess> mProcess;
     QStringList mBinDirs;
+    QMap<QString,QStringList> mFileCache;
 
     //fWatchView: TTreeView;
 

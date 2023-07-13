@@ -67,6 +67,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QScreen>
+#include <QStyleFactory>
 #include <QTcpSocket>
 #include <QTemporaryFile>
 #include <QTextBlock>
@@ -101,7 +102,7 @@ static int findTabIndex(QTabWidget* tabWidget , QWidget* w) {
     for (int i=0;i<tabWidget->count();i++) {
         if (w==tabWidget->widget(i))
             return i;
-    }
+    }    
     return -1;
 }
 
@@ -432,6 +433,8 @@ MainWindow::MainWindow(QWidget *parent)
         ui->actionx86_Assembly_Language_Reference_Manual->setVisible(false);
 #endif
     ui->actionEGE_Manual->setVisible(pSettings->environment().language()=="zh_CN");
+    ui->actionOI_Wiki->setVisible(pSettings->environment().language()=="zh_CN");
+    ui->actionTurtle_Graphics_Manual->setVisible(pSettings->environment().language()=="zh_CN");
     ui->actionDocument->setVisible(pSettings->environment().language()=="zh_CN");
 
     connect(ui->EditorTabsLeft, &EditorsTabWidget::middleButtonClicked,
@@ -589,6 +592,7 @@ void MainWindow::updateEditorActions(const Editor *e)
 
         ui->actionClose->setEnabled(false);
         ui->actionClose_All->setEnabled(false);
+        ui->actionClose_Others->setEnabled(false);
 
         ui->actionAdd_bookmark->setEnabled(false);
         ui->actionRemove_Bookmark->setEnabled(false);
@@ -650,6 +654,7 @@ void MainWindow::updateEditorActions(const Editor *e)
 
         ui->actionClose->setEnabled(true);
         ui->actionClose_All->setEnabled(true);
+        ui->actionClose_Others->setEnabled(mEditorList->pageCount()>1);
 
         int line = e->caretY();
         ui->actionAdd_bookmark->setEnabled(e->document()->count()>0 && !e->hasBookmark(line));
@@ -863,10 +868,15 @@ void MainWindow::applySettings()
     themeManager.setUseCustomTheme(pSettings->environment().useCustomTheme());
     try {
         PAppTheme appTheme = themeManager.theme(pSettings->environment().theme());
-        if (appTheme->isDark())
-            QApplication::setStyle(new DarkFusionStyle());//app takes the onwership
-        else
-            QApplication::setStyle(new LightFusionStyle());//app takes the onwership
+        if (appTheme->useQtFusionStyle()) {
+            if (appTheme->isDark())
+                QApplication::setStyle(new DarkFusionStyle());//app takes the onwership
+            else
+                QApplication::setStyle(new LightFusionStyle());//app takes the onwership
+        } else {
+            QString systemStyle = QStyleFactory::keys()[0]; // Breeze for KDE, etc.
+            QApplication::setStyle(systemStyle);
+        }
         qApp->setPalette(appTheme->palette());
         //fix for qstatusbar bug
         mFileEncodingStatus->setPalette(appTheme->palette());
@@ -1451,10 +1461,15 @@ void MainWindow::openFiles(const QStringList &files)
         e->activate();
 }
 
-Editor* MainWindow::openFile(const QString &filename, bool activate, QTabWidget* page)
+Editor* MainWindow::openFile(QString filename, bool activate, QTabWidget* page)
 {
     if (!fileExists(filename))
         return nullptr;
+
+    QFileInfo info=QFileInfo(filename);
+    if (info.isAbsolute())
+        filename = info.absoluteFilePath();
+
     Editor* editor = mEditorList->getOpenedEditorByFilename(filename);
     if (editor!=nullptr) {
         if (activate) {
@@ -1499,11 +1514,14 @@ Editor* MainWindow::openFile(const QString &filename, bool activate, QTabWidget*
     return nullptr;
 }
 
-void MainWindow::openProject(const QString &filename, bool openFiles)
+void MainWindow::openProject(QString filename, bool openFiles)
 {
     if (!fileExists(filename)) {
         return;
     }
+    QFileInfo info=QFileInfo(filename);
+    if (info.isAbsolute())
+        filename = info.absoluteFilePath();
     Editor* oldEditor=nullptr;
     if (mProject) {
         if (mProject->filename() == filename)
@@ -1703,6 +1721,7 @@ void MainWindow::updateActionIcons()
     ui->toolbarCode->setIconSize(iconSize);
     ui->toolbarCompile->setIconSize(iconSize);
     ui->toolbarDebug->setIconSize(iconSize);
+    ui->toolbarCompilerSet->setIconSize(iconSize);
     for (QToolButton* btn: mClassBrowserToolbar->findChildren<QToolButton *>()) {
         btn->setIconSize(iconSize);
     }
@@ -1725,6 +1744,7 @@ void MainWindow::updateActionIcons()
     ui->actionClose->setIcon(pIconsManager->getIcon(IconsManager::ACTION_FILE_CLOSE));
     ui->actionClose_Project->setIcon(pIconsManager->getIcon(IconsManager::ACTION_PROJECT_CLOSE));
     ui->actionClose_All->setIcon(pIconsManager->getIcon(IconsManager::ACTION_FILE_CLOSE_ALL));
+    ui->actionClose_Others->setIcon(pIconsManager->getIcon(IconsManager::ACTION_FILE_CLOSE_ALL));
     ui->actionPrint->setIcon(pIconsManager->getIcon(IconsManager::ACTION_FILE_PRINT));
 
     ui->actionUndo->setIcon(pIconsManager->getIcon(IconsManager::ACTION_EDIT_UNDO));
@@ -2404,9 +2424,10 @@ void MainWindow::debug()
     mDebugger->sendCommand("-data-list-register-names","");
     mDebugger->sendCommand("-gdb-set", "width 0"); // don't wrap output, very annoying
     mDebugger->sendCommand("-gdb-set", "confirm off");
-    mDebugger->sendCommand("-gdb-set", "print repeats 0"); // don't repeat elements
+    mDebugger->sendCommand("-gdb-set", "print repeats 10");
+    mDebugger->sendCommand("-gdb-set", "print null-stop");
     mDebugger->sendCommand("-gdb-set", QString("print elements %1").arg(pSettings->debugger().arrayElements())); // limit array elements to 500
-    mDebugger->sendCommand("-environment-cd", QString("\"%1\"").arg(extractFileDir(filePath))); // restore working directory
+    //mDebugger->sendCommand("-environment-cd", QString("\"%1\"").arg(extractFileDir(filePath))); // restore working directory
     if (pSettings->debugger().useGDBServer()) {
         mDebugger->sendCommand("-target-select",QString("remote localhost:%1").arg(pSettings->debugger().GDBServerPort()));
         if (!debugInferiorhasBreakpoint() || !debugEnabled) {
@@ -4024,9 +4045,9 @@ void MainWindow::onProblemSetIndexChanged(const QModelIndex &current, const QMod
     if (!idx.isValid()) {
         mProblemSet_RemoveProblem->setEnabled(false);
         mOJProblemModel.setProblem(nullptr);
-        ui->txtProblemCaseExpected->clear();
-        ui->txtProblemCaseInput->clear();
-        ui->txtProblemCaseOutput->clear();
+        ui->txtProblemCaseExpected->clearAll();
+        ui->txtProblemCaseInput->clearAll();
+        ui->txtProblemCaseOutput->clearAll();
         ui->tabProblem->setEnabled(false);
         ui->lblProblem->clear();
         ui->lblProblem->setToolTip("");
@@ -4034,8 +4055,10 @@ void MainWindow::onProblemSetIndexChanged(const QModelIndex &current, const QMod
     } else {
         mProblemSet_RemoveProblem->setEnabled(true);
         POJProblem problem = mOJProblemSetModel.problem(idx.row());
-        if (problem && !problem->answerProgram.isEmpty()) {
-            openFile(problem->answerProgram);
+        if (mFullInitialized) {
+            if (problem && !problem->answerProgram.isEmpty()) {
+                openFile(problem->answerProgram);
+            }
         }
         mOJProblemModel.setProblem(problem);
         updateProblemTitle();
@@ -4065,7 +4088,7 @@ void MainWindow::onProblemCaseIndexChanged(const QModelIndex &current, const QMo
             mProblem_RemoveCases->setEnabled(true);
             mProblem_RunAllCases->setEnabled(ui->actionRun->isEnabled());
             fillProblemCaseInputAndExpected(problemCase);
-            ui->txtProblemCaseOutput->clear();
+            ui->txtProblemCaseOutput->clearAll();
             ui->txtProblemCaseOutput->setPlainText(problemCase->output);
             updateProblemCaseOutput(problemCase);
             return;
@@ -4085,11 +4108,11 @@ void MainWindow::onProblemCaseIndexChanged(const QModelIndex &current, const QMo
     mProblem_RunAllCases->setEnabled(false);
     ui->txtProblemCaseInputFileName->clear();
     ui->btnProblemCaseInputFileName->setEnabled(false);
-    ui->txtProblemCaseInput->clear();
+    ui->txtProblemCaseInput->clearAll();
     ui->txtProblemCaseInput->setReadOnly(true);
-    ui->txtProblemCaseExpected->clear();
+    ui->txtProblemCaseExpected->clearAll();
     ui->txtProblemCaseExpected->setReadOnly(true);
-    ui->txtProblemCaseOutput->clear();
+    ui->txtProblemCaseOutput->clearAll();
 
     ui->lblProblemCaseExpected->clear();
     ui->lblProblemCaseOutput->clear();
@@ -4394,6 +4417,13 @@ void MainWindow::onFilesViewRemoveFiles()
     QModelIndexList indexList = ui->treeFiles->selectionModel()->selectedRows();
     if (indexList.isEmpty()) {
         QModelIndex index = ui->treeFiles->currentIndex();
+        if (QMessageBox::question(ui->treeFiles,tr("Delete")
+                                  ,tr("Do you really want to delete %1?").arg(mFileSystemModel.fileName(index)),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No)!=QMessageBox::Yes)
+            return;
+        doFilesViewRemoveFile(index);
+    } else if (indexList.count()==1) {
+        QModelIndex index = indexList[0];
         if (QMessageBox::question(ui->treeFiles,tr("Delete")
                                   ,tr("Do you really want to delete %1?").arg(mFileSystemModel.fileName(index)),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No)!=QMessageBox::Yes)
@@ -4987,6 +5017,7 @@ void MainWindow::onEditorTabContextMenu(QTabWidget* tabWidget, const QPoint &pos
     }
     menu.addAction(ui->actionClose);
     menu.addAction(ui->actionClose_All);
+    menu.addAction(ui->actionClose_Others);
     menu.addSeparator();
     menu.addAction(ui->actionToggle_Readonly);
     menu.addSeparator();
@@ -5931,7 +5962,10 @@ void MainWindow::onOJProblemCaseStarted(const QString& id,int current, int total
         if (!idx.isValid() || row != idx.row()) {
             ui->tblProblemCases->setCurrentIndex(mOJProblemModel.index(row,0));
         }
-        ui->txtProblemCaseOutput->clear();
+        ui->txtProblemCaseOutput->clearAll();
+        if (ui->txtProblemCaseExpected->document()->blockCount()<=5000) {
+            ui->txtProblemCaseExpected->clearFormat();
+        }
     }
 }
 
@@ -5959,6 +5993,7 @@ void MainWindow::onOJProblemCaseNewOutputGetted(const QString &/* id */, const Q
 
 void MainWindow::onOJProblemCaseResetOutput(const QString &/* id */, const QString &line)
 {
+    ui->txtProblemCaseOutput->clearAll();
     ui->txtProblemCaseOutput->setPlainText(line);
 }
 
@@ -6496,9 +6531,13 @@ void MainWindow::on_btnSearchAgain_clicked()
         if (results->scope==SearchFileScope::wholeProject
                 && pMainWindow->project()==nullptr)
             return;
-        mSearchInFilesDialog->findInFiles(results->keyword,
-                                   results->scope,
-                                   results->options);
+        mSearchInFilesDialog->findInFiles(
+                    results->keyword,
+                    results->scope,
+                    results->options,
+                    results->folder,
+                    results->filters,
+                    results->searchSubfolders);
     } else if (results->searchType == SearchType::FindOccurences) {
         CppRefacter refactor;
         refactor.findOccurence(results->statementFullname,results->scope);
@@ -6734,7 +6773,7 @@ void MainWindow::on_actionFind_references_triggered()
     if (editor && editor->pointToCharLine(mEditorContextMenuPos,pos)) {
         CppRefacter refactor;
         refactor.findOccurence(editor,pos);
-        showSearchPanel(true);
+        showSearchPanel(false);
     }
 }
 
@@ -7405,12 +7444,14 @@ void MainWindow::fillProblemCaseInputAndExpected(const POJProblemCase &problemCa
     ui->btnProblemCaseExpectedOutputFileName->setEnabled(true);
     if (fileExists(problemCase->expectedOutputFileName)) {
         ui->txtProblemCaseExpected->setReadOnly(true);
+        ui->txtProblemCaseExpected->clearAll();
         ui->txtProblemCaseExpected->setPlainText(readFileToByteArray(problemCase->expectedOutputFileName));
         ui->btnProblemCaseClearExpectedOutputFileName->setVisible(true);
         ui->txtProblemCaseExpectedOutputFileName->setText(extractFileName(problemCase->expectedOutputFileName));
         ui->txtProblemCaseExpectedOutputFileName->setToolTip(problemCase->inputFileName);
     } else {
         ui->txtProblemCaseExpected->setReadOnly(false);
+        ui->txtProblemCaseExpected->clearAll();
         ui->txtProblemCaseExpected->setPlainText(problemCase->expected);
         ui->btnProblemCaseClearExpectedOutputFileName->setVisible(false);
         ui->txtProblemCaseExpectedOutputFileName->clear();
@@ -7431,9 +7472,19 @@ void MainWindow::doFilesViewRemoveFile(const QModelIndex &index)
                                       + tr("Do you really want to delete it?"),
                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No)!=QMessageBox::Yes)
             return;
+#if QT_VERSION >= QT_VERSION_CHECK(5,15,2)
+        if (!QFile::moveToTrash(dir.absolutePath()))
+            dir.removeRecursively();
+#else
         dir.removeRecursively();
+#endif
     } else {
+#if QT_VERSION >= QT_VERSION_CHECK(5,15,2)
+        if (!QFile::moveToTrash(mFileSystemModel.filePath(index)))
+            QFile::remove(mFileSystemModel.filePath(index));
+#else
         QFile::remove(mFileSystemModel.filePath(index));
+#endif
     }
 }
 
@@ -7959,34 +8010,30 @@ void MainWindow::doGenerateAssembly()
 void MainWindow::updateProblemCaseOutput(POJProblemCase problemCase)
 {
     if (problemCase->testState == ProblemCaseTestState::Failed) {
-        int diffLine;
-        if (problemCase->outputLineCounts > problemCase->expectedLineCounts) {
-            diffLine = problemCase->expectedLineCounts;
-        } else if (problemCase->outputLineCounts < problemCase->expectedLineCounts) {
-            diffLine = problemCase->outputLineCounts;
-        } else {
+        int diffLine=-1;
+        if (problemCase->firstDiffLine!=-1) {
             diffLine = problemCase->firstDiffLine;
-        }
+        } else
+            return;
         if (diffLine < problemCase->outputLineCounts) {
-            QTextBlock block = ui->txtProblemCaseOutput->document()->findBlockByLineNumber(diffLine);
-            if (!block.isValid())
-                return;
-            QTextCursor cur(block);
-            if (cur.isNull())
-                return;
-            cur = QTextCursor(block);
-            QTextCharFormat oldFormat = cur.charFormat();
-            QTextCharFormat format = cur.charFormat();
-            cur.select(QTextCursor::LineUnderCursor);
-            format.setUnderlineColor(mErrorColor);
-            format.setUnderlineStyle(QTextCharFormat::WaveUnderline);
-            cur.setCharFormat(format);
-            cur.clearSelection();
-            cur.setCharFormat(oldFormat);
-            ui->txtProblemCaseOutput->setTextCursor(cur);
-        } else if (diffLine < problemCase->expectedLineCounts) {
+            ui->txtProblemCaseOutput->highlightLine(diffLine, mErrorColor);
+        } else {
             ui->txtProblemCaseOutput->moveCursor(QTextCursor::MoveOperation::End);
+            ui->txtProblemCaseOutput->moveCursor(QTextCursor::MoveOperation::StartOfLine);
         }
+        if (diffLine < problemCase->expectedLineCounts) {
+            if (ui->txtProblemCaseExpected->document()->blockCount()<=5000) {
+                ui->txtProblemCaseExpected->highlightLine(diffLine, mErrorColor);
+            } else {
+                ui->txtProblemCaseExpected->locateLine(diffLine);
+            }
+        } else {
+            ui->txtProblemCaseExpected->moveCursor(QTextCursor::MoveOperation::End);
+            ui->txtProblemCaseExpected->moveCursor(QTextCursor::MoveOperation::StartOfLine);
+        }
+    } else {
+        ui->txtProblemCaseOutput->moveCursor(QTextCursor::MoveOperation::Start);
+        ui->txtProblemCaseExpected->moveCursor(QTextCursor::MoveOperation::Start);
     }
 }
 
@@ -9689,7 +9736,7 @@ void MainWindow::on_actionSubmit_Issues_triggered()
 
 void MainWindow::on_actionDocument_triggered()
 {
-    QDesktopServices::openUrl(QUrl("https://royqh1979.gitee.io/redpandacpp/docsy/docs/"));
+    QDesktopServices::openUrl(QUrl("https://royqh1979.gitee.io/redpandacpp/docsy/docs/usage"));
 }
 
 
@@ -9772,5 +9819,171 @@ void MainWindow::on_actionNew_Text_File_triggered()
         }
     }
     newEditor("txt");
+}
+
+
+void MainWindow::on_actionPage_Up_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::PageUp);
+    }
+}
+
+
+void MainWindow::on_actionPage_Down_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::PageDown);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Line_Start_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::LineStart);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Line_End_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::LineEnd);
+    }
+}
+
+
+void MainWindow::on_actionGoto_File_Start_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::EditorStart);
+    }
+}
+
+
+void MainWindow::on_actionGoto_File_End_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::EditorEnd);
+    }
+}
+
+
+void MainWindow::on_actionPage_Up_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelPageUp);
+    }
+}
+
+
+void MainWindow::on_actionPage_Down_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelPageDown);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Page_Start_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::PageTop);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Page_End_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::PageBottom);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Page_Start_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelPageTop);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Page_End_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelPageBottom);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Line_Start_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelLineStart);
+    }
+}
+
+
+void MainWindow::on_actionGoto_Line_End_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelLineEnd);
+    }
+}
+
+
+void MainWindow::on_actionGoto_File_Start_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelEditorStart);
+    }
+}
+
+
+void MainWindow::on_actionGoto_File_End_and_Select_triggered()
+{
+    Editor * editor = mEditorList->getEditor();
+    if (editor && editor->hasFocus()) {
+        editor->processCommand(QSynedit::EditCommand::SelEditorEnd);
+    }
+}
+
+
+void MainWindow::on_actionClose_Others_triggered()
+{
+    mClosing = true;
+    Editor* e = mEditorList->getEditor();
+    if (e) {
+        mEditorList->closeOthers(e);
+    }
+    mClosing = false;
+}
+
+void MainWindow::on_actionOI_Wiki_triggered()
+{
+    QDesktopServices::openUrl(QUrl("https://oi-wiki.org/"));
+}
+
+
+void MainWindow::on_actionTurtle_Graphics_Manual_triggered()
+{
+    QDesktopServices::openUrl(QUrl("https://zhuanlan.zhihu.com/p/538666844"));
 }
 

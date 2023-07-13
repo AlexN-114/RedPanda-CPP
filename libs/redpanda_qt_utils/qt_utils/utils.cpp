@@ -32,6 +32,7 @@
 #include <QWindow>
 #include <QScreen>
 #include <QDirIterator>
+#include <QTextEdit>
 #ifdef Q_OS_WIN
 #include <QDirIterator>
 #include <QFont>
@@ -114,7 +115,7 @@ const QByteArray guessTextEncoding(const QByteArray& text){
 
 bool isTextAllAscii(const QByteArray& text) {
     for (char c:text) {
-        if (c<=0) {
+        if (c<0 || c>127) {
             return false;
         }
     }
@@ -724,3 +725,21 @@ QStringList absolutePaths(const QString &dirPath, const QStringList &relativePat
 }
 
 
+
+bool isBinaryContent(const QByteArray &text)
+{
+    for (char c:text) {
+        if (c>=0 && c<' ' && c!='\t' && c!='\n' && c!='\r') {
+            return true;
+        }
+    }
+    return false;
+}
+
+void clearQPlainTextEditFormat(QTextEdit *editor)
+{
+    QTextCursor cursor = editor->textCursor();
+    cursor.select(QTextCursor::Document);
+    cursor.setCharFormat(QTextCharFormat());
+    cursor.clearSelection();
+}

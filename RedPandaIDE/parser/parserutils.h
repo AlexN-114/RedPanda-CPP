@@ -62,7 +62,7 @@ enum class KeywordType {
     SkipNextColon, // move to : and skip it
     SkipNextParenthesis, // move to ) and skip it
     MoveToLeftBrace,// move to {
-    MoveToRightBrace, // move to }
+//    MoveToRightBrace, // move to }
     For, //for
     Catch, //catch
     Public, // public
@@ -329,6 +329,7 @@ bool isCppFile(const QString& filename);
 bool isCppKeyword(const QString& word);
 bool isCppControlKeyword(const QString& word);
 bool isScopeTypeKind(StatementKind kind);
+bool isTypeKind(StatementKind kind);
 MemberOperatorType getOperatorType(const QString& phrase, int index);
 QStringList getOwnerExpressionAndMember(
         const QStringList expression,

@@ -69,6 +69,7 @@ QSynEdit::QSynEdit(QWidget *parent) : QAbstractScrollArea(parent),
     mDocument = std::make_shared<Document>(mFontDummy, mFontDummy, this);
     //fPlugins := TList.Create;
     mMouseMoved = false;
+    mMouseOrigin = QPoint(0,0);
     mUndoing = false;
     mDocument->connect(mDocument.get(), &Document::changed, this, &QSynEdit::onLinesChanged);
     mDocument->connect(mDocument.get(), &Document::changing, this, &QSynEdit::onLinesChanging);
@@ -644,28 +645,25 @@ bool QSynEdit::pointToCharLine(const QPoint &point, BufferCoord &coord)
 {
     // Make sure it fits within the SynEdit bounds (and on the gutter)
     if ((point.x() < gutterWidth() + clientLeft())
-            || (point.x()>clientWidth()+clientLeft())
+            || (point.x()> clientWidth()+clientLeft())
             || (point.y() < clientTop())
             || (point.y() > clientTop()+clientHeight())) {
         return false;
     }
 
-    coord = displayToBufferPos(pixelsToNearestRowColumn(point.x(),point.y()));
+    coord = displayToBufferPos(pixelsToRowColumn(point.x(),point.y()));
     return true;
 }
 
 bool QSynEdit::pointToLine(const QPoint &point, int &line)
 {
-    // Make sure it fits within the SynEdit bounds
-    if ((point.x() < clientLeft())
-            || (point.x()>clientWidth()+clientLeft())
-            || (point.y() < clientTop())
+    if ((point.y() < clientTop())
             || (point.y() > clientTop()+clientHeight())) {
         return false;
     }
-
-    BufferCoord coord = displayToBufferPos(pixelsToNearestRowColumn(point.x(),point.y()));
-    line = coord.line;
+    line = rowToLine(
+        std::max(1, mTopLine + (point.y() / mTextHeight))
+    );
     return true;
 }
 
@@ -1225,23 +1223,23 @@ void QSynEdit::unCollpaseAll()
 
 void QSynEdit::processGutterClick(QMouseEvent *event)
 {
-    int X = event->pos().x();
-    int Y = event->pos().y();
-    DisplayCoord RowColumn = pixelsToNearestRowColumn(X, Y);
-    int Line = rowToLine(RowColumn.Row);
+    int x = event->pos().x();
+    int y = event->pos().y();
+    DisplayCoord rowColumn = pixelsToNearestRowColumn(x, y);
+    int line = rowToLine(rowColumn.Row);
 
     // Check if we clicked on a folding thing
     if (mUseCodeFolding) {
-        PCodeFoldingRange foldRange = foldStartAtLine(Line);
+        PCodeFoldingRange foldRange = foldStartAtLine(line);
         if (foldRange) {
             // See if we actually clicked on the rectangle...
             //rect.Left := Gutter.RealGutterWidth(CharWidth) - Gutter.RightOffset;
             QRect rect;
             rect.setLeft(mGutterWidth - mGutter.rightOffset());
             rect.setRight(rect.left() + mGutter.rightOffset() - 4);
-            rect.setTop((RowColumn.Row - mTopLine) * mTextHeight);
+            rect.setTop((rowColumn.Row - mTopLine) * mTextHeight);
             rect.setBottom(rect.top() + mTextHeight - 1);
-            if (rect.contains(QPoint(X, Y))) {
+            if (rect.contains(event->pos())) {
                 if (foldRange->collapsed)
                     uncollapse(foldRange);
                 else
@@ -1252,8 +1250,8 @@ void QSynEdit::processGutterClick(QMouseEvent *event)
     }
 
     // If not, check gutter marks
-    if (Line>=1 && Line <= mDocument->count()) {
-        emit gutterClicked(event->button(),X,Y,Line);
+    if (line>=1 && line <= mDocument->count()) {
+        emit gutterClicked(event->button(),x,y,line);
     }
 }
 
@@ -1540,6 +1538,8 @@ int QSynEdit::calcIndentSpaces(int line, const QString& lineText, bool addIndent
     line = std::min(line, mDocument->count()+1);
     if (line<=1)
         return 0;
+    if (lineText.startsWith("//"))
+        return 0;
     if (mFormatter) {
         return mFormatter->calcIndentSpaces(line,lineText,addIndent,this);
     }
@@ -1651,7 +1651,7 @@ void QSynEdit::doUncomment()
             continue;
         // Find // after blanks only
         int j = 0;
-        while ((j+1 < s.length()) && (s[j] == '\n' || s[j] == '\t'))
+        while ((j+1 < s.length()) && (s[j] == ' ' || s[j] == '\t'))
             j++;
         s.remove(j,symbolLen);
         mDocument->putLine(i,s);
@@ -1748,6 +1748,8 @@ void QSynEdit::doMouseScroll(bool isDragging)
         mDropped=false;
         return;
     }
+    if (mStateFlags.testFlag(StateFlag::sfDblClicked))
+        return;
     if (!hasFocus())
         return;
     Qt::MouseButtons buttons = qApp->mouseButtons();
@@ -6147,6 +6149,7 @@ void QSynEdit::mousePressEvent(QMouseEvent *event)
     bool bWasSel = false;
     bool bStartDrag = false;
     mMouseMoved = false;
+    mMouseOrigin = event->pos();
     Qt::MouseButton button = event->button();
     int X=event->pos().x();
     int Y=event->pos().y();
@@ -6231,7 +6234,9 @@ void QSynEdit::mouseReleaseEvent(QMouseEvent *event)
 void QSynEdit::mouseMoveEvent(QMouseEvent *event)
 {
     QAbstractScrollArea::mouseMoveEvent(event);
-    mMouseMoved = true;
+    if ( (std::abs(event->pos().y()-mMouseOrigin.y()) > 2)
+            || (std::abs(event->pos().x()-mMouseOrigin.x()) > 2) )
+        mMouseMoved = true;
     Qt::MouseButtons buttons = event->buttons();
     if (mStateFlags.testFlag(StateFlag::sfWaitForDragging)
             && !mReadOnly) {
@@ -6307,11 +6312,11 @@ void QSynEdit::wheelEvent(QWheelEvent *event)
         mWheelAccumulatedDeltaX+=event->angleDelta().y();
         while (mWheelAccumulatedDeltaX>=120) {
             mWheelAccumulatedDeltaX-=120;
-            horizontalScrollBar()->setValue(horizontalScrollBar()->value()-mMouseWheelScrollSpeed);
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value()+mMouseWheelScrollSpeed);
         }
         while (mWheelAccumulatedDeltaX<=-120) {
             mWheelAccumulatedDeltaX+=120;
-            horizontalScrollBar()->setValue(horizontalScrollBar()->value()+mMouseWheelScrollSpeed);
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value()-mMouseWheelScrollSpeed);
         }
     } else {
         if ( (mWheelAccumulatedDeltaY>0 &&event->angleDelta().y()<0)
@@ -6325,6 +6330,19 @@ void QSynEdit::wheelEvent(QWheelEvent *event)
         while (mWheelAccumulatedDeltaY<=-120) {
             mWheelAccumulatedDeltaY+=120;
             verticalScrollBar()->setValue(verticalScrollBar()->value()+mMouseWheelScrollSpeed);
+        }
+
+        if ( (mWheelAccumulatedDeltaX>0 &&event->angleDelta().x()<0)
+             || (mWheelAccumulatedDeltaX<0 &&event->angleDelta().x()>0))
+            mWheelAccumulatedDeltaX=0;
+        mWheelAccumulatedDeltaX+=event->angleDelta().x();
+        while (mWheelAccumulatedDeltaX>=120) {
+            mWheelAccumulatedDeltaX-=120;
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value()+mMouseWheelScrollSpeed);
+        }
+        while (mWheelAccumulatedDeltaX<=-120) {
+            mWheelAccumulatedDeltaX+=120;
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value()-mMouseWheelScrollSpeed);
         }
     }
     event->accept();
@@ -6377,7 +6395,13 @@ void QSynEdit::dropEvent(QDropEvent *event)
 
     BufferCoord coord = displayToBufferPos(pixelsToNearestRowColumn(event->pos().x(),
                                                                     event->pos().y()));
-    if (coord>=mDragSelBeginSave && coord<=mDragSelEndSave) {
+    if (
+            (event->proposedAction() == Qt::DropAction::CopyAction
+             && coord>mDragSelBeginSave && coord<mDragSelEndSave)
+             ||
+             (event->proposedAction() != Qt::DropAction::CopyAction
+             && coord>=mDragSelBeginSave && coord<=mDragSelEndSave)
+            ) {
         mDocument->deleteAt(mDocument->count()-1);
         //do nothing if drag onto itself
         event->acceptProposedAction();

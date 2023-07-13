@@ -221,8 +221,8 @@ public:
 
     TodoModel* todoModel();
 
-    Editor* openFile(const QString& filename, bool activate=true, QTabWidget* page=nullptr);
-    void openProject(const QString& filename, bool openFiles = true);
+    Editor* openFile(QString filename, bool activate=true, QTabWidget* page=nullptr);
+    void openProject(QString filename, bool openFiles = true);
     void changeOptions(const QString& widgetName=QString(), const QString& groupName=QString());
     void changeProjectOptions(const QString& widgetName=QString(), const QString& groupName=QString());
 
@@ -808,6 +808,44 @@ private slots:
     void on_actionAdd_Watchpoint_triggered();
 
     void on_actionNew_Text_File_triggered();
+
+    void on_actionPage_Up_triggered();
+
+    void on_actionPage_Down_triggered();
+
+    void on_actionGoto_Line_Start_triggered();
+
+    void on_actionGoto_Line_End_triggered();
+
+    void on_actionGoto_File_Start_triggered();
+
+    void on_actionGoto_File_End_triggered();
+
+    void on_actionPage_Up_and_Select_triggered();
+
+    void on_actionPage_Down_and_Select_triggered();
+
+    void on_actionGoto_Page_Start_triggered();
+
+    void on_actionGoto_Page_End_triggered();
+
+    void on_actionGoto_Page_Start_and_Select_triggered();
+
+    void on_actionGoto_Page_End_and_Select_triggered();
+
+    void on_actionGoto_Line_Start_and_Select_triggered();
+
+    void on_actionGoto_Line_End_and_Select_triggered();
+
+    void on_actionGoto_File_Start_and_Select_triggered();
+
+    void on_actionGoto_File_End_and_Select_triggered();
+
+    void on_actionClose_Others_triggered();
+
+    void on_actionOI_Wiki_triggered();
+
+    void on_actionTurtle_Graphics_Manual_triggered();
 
 private:
     Ui::MainWindow *ui;

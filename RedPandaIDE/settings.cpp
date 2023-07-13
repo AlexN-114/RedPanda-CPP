@@ -2242,7 +2242,7 @@ void Settings::CompilerSet::setProperties(const QString& binDir, const QString& 
 #endif
             } else {
 #ifdef Q_OS_WIN
-                mName = "MinGW GCC " + mVersion;
+                mName = "MinGW-w64 GCC " + mVersion;
 #else
                 mName = "GCC " + mVersion;
 #endif
@@ -2748,7 +2748,8 @@ static void setDebugOptions(Settings::PCompilerSet pSet, bool enableAsan = false
 //        pSet->setCustomLinkParams("-fsanitize=address");
 //        pSet->setUseCustomLinkParams(true);
     }
-    pSet->setCompileOption(CC_CMD_OPT_STACK_PROTECTOR, "-strong");
+    //Some windows gcc don't correctly support this
+    //pSet->setCompileOption(CC_CMD_OPT_STACK_PROTECTOR, "-strong");
     pSet->setStaticLink(false);
 
 }
@@ -3718,6 +3719,16 @@ void Settings::Executor::setConvertHTMLToTextForExpected(bool newConvertHTMLToTe
     mConvertHTMLToTextForExpected = newConvertHTMLToTextForExpected;
 }
 
+bool Settings::Executor::redirectStderrToToolLog() const
+{
+    return mRedirectStderrToToolLog;
+}
+
+void Settings::Executor::setRedirectStderrToToolLog(bool newRedirectStderrToToolLog)
+{
+    mRedirectStderrToToolLog = newRedirectStderrToToolLog;
+}
+
 bool Settings::Executor::convertHTMLToTextForInput() const
 {
     return mConvertHTMLToTextForInput;
@@ -3793,6 +3804,7 @@ void Settings::Executor::doSave()
     saveValue("input_convert_html", mConvertHTMLToTextForInput);
     saveValue("expected_convert_html", mConvertHTMLToTextForExpected);
     saveValue("ignore_spaces_when_validating_cases", mIgnoreSpacesWhenValidatingCases);
+    saveValue("redirect_stderr_to_toollog", mRedirectStderrToToolLog);
     saveValue("case_editor_font_name",mCaseEditorFontName);
     saveValue("case_editor_font_size",mCaseEditorFontSize);
     saveValue("case_editor_font_only_monospaced",mCaseEditorFontOnlyMonospaced);
@@ -3827,6 +3839,8 @@ void Settings::Executor::doLoad()
     mConvertHTMLToTextForInput = boolValue("input_convert_html", false);
     mConvertHTMLToTextForExpected = boolValue("expected_convert_html", false);
     mIgnoreSpacesWhenValidatingCases = boolValue("ignore_spaces_when_validating_cases",false);
+    mRedirectStderrToToolLog = boolValue("redirect_stderr_to_toollog", false);
+
 #ifdef Q_OS_WIN
     mCaseEditorFontName = stringValue("case_editor_font_name","consolas");
 #elif defined(Q_OS_MACOS)
