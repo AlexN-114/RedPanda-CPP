@@ -113,6 +113,11 @@ public:
         ACTION_MISC_RENAME,
         ACTION_MISC_HELP,
         ACTION_MISC_FILTER,
+        ACTION_MISC_MOVEUP,
+        ACTION_MISC_MOVEDOWN,
+        ACTION_MISC_RESET,
+        ACTION_MISC_MOVETOP,
+        ACTION_MISC_MOVEBOTTOM,
 
         ACTION_FILE_NEW,
         ACTION_FILE_OPEN,
@@ -193,7 +198,7 @@ public:
     };
     explicit IconsManager(QObject *parent = nullptr);
 
-    void updateEditorGuttorIcons(const QString& iconSet, int size);
+    void updateEditorGutterIcons(const QString& iconSet, int size);
     void updateParserIcons(const QString& iconSet, int size);
     void updateActionIcons(const QString& iconSet, int size);
     void updateFileSystemIcons(const QString& iconSet, int size);
@@ -211,13 +216,20 @@ public:
     void prepareCustomIconSet(const QString &customIconSet);
 
     QPixmap getPixmapForStatement(PStatement statement);
+    QPixmap getPixmapForStatement(PStatement statement, int size);
 
     const QString iconSetsFolder() const;
     void setIconSetsFolder(const QString &newIconSetsFolder);
 
     QList<PIconSet> listIconSets();
+    QString iconSet() const;
+    void setIconSet(const QString &newIconSet);
+
 private:
     void updateMakeDisabledIconDarker(const QString& iconset);
+    void updateParserIcons(QMap<IconName,PPixmap> &iconPixmaps, const QString& iconSet, int size);
+    QPixmap getPixmapForStatement(const QMap<IconName,PPixmap> &iconPixmaps, PStatement statement);
+    PPixmap getPixmap(const QMap<IconName,PPixmap> &iconPixmaps, IconName iconName) const;
 signals:
     void actionIconsUpdated();
 private:
@@ -226,6 +238,11 @@ private:
     QSize mActionIconSize;
     QString mIconSetTemplate;
     QString mIconSetsFolder;
+    QString mParserIconSet;
+    int mParserIconSize;
+    QString mCachedParserIconSet;
+    int mCachedParserIconSize;
+    QMap<IconName,PPixmap> mCachedParserIconPixmaps;
 
     bool mMakeDisabledIconDarker;
 };

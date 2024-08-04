@@ -25,6 +25,7 @@
 #include <QDebug>
 #include <QInputDialog>
 #include <QFileDialog>
+#include <qsynedit/document.h>
 
 EditorColorSchemeWidget::EditorColorSchemeWidget(const QString& name, const QString& group, QWidget *parent) :
     SettingsWidget(name,group,parent),
@@ -32,6 +33,9 @@ EditorColorSchemeWidget::EditorColorSchemeWidget(const QString& name, const QStr
 {
     ui->setupUi(this);
     mStatementColors = std::make_shared<QHash<StatementKind, std::shared_ptr<ColorSchemeItem> >>();
+
+    mItemDelegate = new ColorSchemeItemDelegate(this);
+    ui->cbScheme->setItemDelegate(mItemDelegate);
 
     mDefaultSchemeComboFont = ui->cbScheme->font();
     mModifiedSchemeComboFont = mDefaultSchemeComboFont;
@@ -44,12 +48,14 @@ EditorColorSchemeWidget::EditorColorSchemeWidget(const QString& name, const QStr
         ui->cbScheme->addItem(schemeName);
         if (scheme->customed())
             ui->cbScheme->setItemData(schemeCount,mModifiedSchemeComboFont,Qt::FontRole);
+        else
+            ui->cbScheme->setItemData(schemeCount,mDefaultSchemeComboFont,Qt::FontRole);
         schemeCount++;
     }
     QItemSelectionModel *m = ui->treeItems->selectionModel();
     ui->treeItems->setModel(&mDefinesModel);
     delete m;
-    mDefinesModel.setHorizontalHeaderLabels(QStringList());
+    mDefinesModel.setHorizontalHeaderLabels(QStringList());        
     for (QString defineName : pColorManager->getDefines()) {
         addDefine(defineName, pColorManager->getDefine(defineName));
     }
@@ -65,6 +71,7 @@ EditorColorSchemeWidget::EditorColorSchemeWidget(const QString& name, const QStr
             this, &EditorColorSchemeWidget::onItemSelectionChanged);
     connect(this, &SettingsWidget::settingsChanged,this,
             &EditorColorSchemeWidget::onSettingChanged);
+    ui->editDemo->setUseCodeFolding(true);
     ui->editDemo->document()->setText(
             "#include <iostream>\n"
             "#include <conio.h>\n"
@@ -73,20 +80,28 @@ EditorColorSchemeWidget::EditorColorSchemeWidget(const QString& name, const QStr
             "\n"
             "int main(int argc, char **argv)\n"
             "{\n"
-            "    int numbers[20];\n"
-            "    float average, total; //breakpoint\n"
-            "    for (int i = 0; i <= 19; i++)\n"
-            "    { // active breakpoint\n"
+            "    int numbers[20]; // warning line\n"
+            "    float average, total; // bookmark\n"
+            "    for (int i = 0; i <= 19; i++) // active breakpoint\n"
+            "    { // breakpoint\n"
             "        numbers[i] = i+x;\n"
             "        Total += i; // error line\n"
             "    }\n"
             "    average = total / 20; // comment\n"
-            "    cout << \"total: \" << total << \"\nAverage: \" << average;\n"
+            "    std::cout << \"total: \" << total <<\n"
+            "    \"\\nAverage: \" << average;\n"
             "    getch();\n"
             "}\n"
                 );
     ui->editDemo->setReadOnly(true);
-    ui->editDemo->setStatementColors(mStatementColors);
+    ui->editDemo->toggleBreakpoint(11);
+    ui->editDemo->toggleBookmark(9);
+    ui->editDemo->addSyntaxIssues(13, 9, 14, CompileIssueType::Error, "[Error] 'Total' was not declared in this scope; did you mean 'total'?");
+    ui->editDemo->addSyntaxIssues(8, 9, 16, CompileIssueType::Warning, "[Warning] variable 'numbers' set but not used [-Wunused-but-set-variable]");
+    ui->editDemo->setCaretY(9);
+    ui->editDemo->setActiveBreakpointFocus(10,false);
+    ui->editDemo->reparseDocument();
+    ui->editDemo->invalidate();
     onItemSelectionChanged();
 }
 
@@ -250,6 +265,7 @@ void EditorColorSchemeWidget::onSettingChanged()
 {
     pColorManager->updateStatementColors(mStatementColors,ui->cbScheme->currentText());
     ui->editDemo->applyColorScheme(ui->cbScheme->currentText());
+    ui->editDemo->setStatementColors(mStatementColors);
 }
 
 void EditorColorSchemeWidget::onForegroundChanged()
@@ -309,6 +325,7 @@ void EditorColorSchemeWidget::changeSchemeComboFont()
 void EditorColorSchemeWidget::doLoad()
 {
     ui->cbScheme->setCurrentText(pSettings->editor().colorScheme());
+    changeSchemeComboFont();
     ui->chkRainborParenthesis->setChecked(pSettings->editor().rainbowParenthesis());
 }
 
@@ -422,7 +439,7 @@ void EditorColorSchemeWidget::on_actionReset_Scheme_triggered()
         if (pColorManager->restoreToDefault(ui->cbScheme->currentText())) {
             ui->cbScheme->setItemData(
                         ui->cbScheme->currentIndex(),
-                        QVariant(),
+                        mDefaultSchemeComboFont,
                         Qt::FontRole);
             ui->cbScheme->setFont(mDefaultSchemeComboFont);
             //ui->cbScheme->view()->setFont(mDefaultSchemeComboFont);
@@ -471,3 +488,19 @@ void EditorColorSchemeWidget::on_actionDelete_Scheme_triggered()
 }
 
 
+
+ColorSchemeItemDelegate::ColorSchemeItemDelegate(QObject *parent):
+    QStyledItemDelegate{parent}
+{
+
+}
+
+void ColorSchemeItemDelegate::initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const
+{
+    QStyledItemDelegate::initStyleOption(option,index);
+    QVariant value = index.data(Qt::FontRole);
+    if (value.isValid() && !value.isNull()) {
+        option->font = qvariant_cast<QFont>(value);
+        option->fontMetrics = QFontMetrics(option->font);
+    }
+}

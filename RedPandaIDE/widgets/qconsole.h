@@ -112,8 +112,8 @@ class QConsole : public QAbstractScrollArea
     Q_OBJECT
 public:
     explicit QConsole(QWidget* parent = nullptr);
-    int historySize() const;
-    void setHistorySize(int historySize);
+    int maxHistory() const;
+    void setMaxHistory(int historySize);
 
     int tabSize() const;
 
@@ -142,7 +142,7 @@ signals:
 private:
     ConsoleLines mContents;
     QStringList mCommandHistory;
-    int mHistorySize;
+    int mMaxHistory;
     int mHistoryIndex;
     QString mCommand;
     QString mCurrentEditableLine;
@@ -199,7 +199,7 @@ private:
     bool caretInSelection();
     QString removeSelection();
     bool hasSelection();
-    int computeScrollY(int Y);
+    int computeScrollY(int y);
     RowColumn pixelsToNearestRowColumn(int x,int y);
     QString lineBreak();
 

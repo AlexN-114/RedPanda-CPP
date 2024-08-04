@@ -25,9 +25,10 @@
 #include <QMessageBox>
 #include <QStringList>
 #include <QAbstractNativeEventFilter>
-#include <QDesktopWidget>
 #include <QDir>
 #include <QScreen>
+#include <QLockFile>
+#include <QFontDatabase>
 #include "common.h"
 #include "colorscheme.h"
 #include "iconsmanager.h"
@@ -37,6 +38,8 @@
 #include "editorlist.h"
 #include "widgets/choosethemedialog.h"
 #include "thememanager.h"
+#include "utils/font.h"
+#include "problems/ojproblemset.h"
 
 #ifdef Q_OS_WIN
 #include <QTemporaryFile>
@@ -45,6 +48,7 @@
 #include <QSharedMemory>
 #include <QBuffer>
 #include <winuser.h>
+#include <QFontDatabase>
 
 #include "widgets/cpudialog.h"
 #endif
@@ -58,7 +62,13 @@ public:
     bool nativeEventFilter(const QByteArray &eventType, void *message, long *result) override;
 };
 
-#define WM_USER_OPEN_FILE (WM_USER+1)
+#ifndef WM_DPICHANGED
+# define WM_DPICHANGED 0x02e0
+#endif
+
+#define WM_APP_OPEN_FILE (WM_APP + 6736 /* “OPEN” on dial pad */)
+static_assert(WM_APP_OPEN_FILE < 0xc000);
+
 HWND prevAppInstance = NULL;
 BOOL CALLBACK GetPreviousInstanceCallback(HWND hwnd, LPARAM param){
     BOOL result = TRUE;
@@ -144,7 +154,7 @@ bool WindowLogoutEventFilter::nativeEventFilter(const QByteArray & /*eventType*/
         }
         break;
         }
-    case WM_USER_OPEN_FILE: {
+    case WM_APP_OPEN_FILE: {
         QSharedMemory sharedMemory("RedPandaCpp/openfiles");
         if (sharedMemory.attach()) {
             QBuffer buffer;
@@ -184,7 +194,7 @@ bool sendFilesToInstance() {
             const char *from = buffer.data().data();
             memcpy(to, from, qMin(sharedMemory.size(), size));
             sharedMemory.unlock();
-            SendMessage(prevInstance,WM_USER_OPEN_FILE,0,0);
+            SendMessage(prevInstance,WM_APP_OPEN_FILE,0,0);
             return true;
         }
     }
@@ -243,16 +253,36 @@ void setTheme(const QString& theme) {
 
 int main(int argc, char *argv[])
 {
-#ifdef Q_OS_WINDOWS
-    // Make title bar and palette follow system-wide dark mode setting on recent Windows releases.
-    qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
+//#ifdef Q_OS_WINDOWS
+//    // Make title bar and palette follow system-wide dark mode setting on recent Windows releases.
+//    // Use freetype as the fontengine
+//    qputenv("QT_QPA_PLATFORM", "windows:darkmode=2:fontengine=freetype");
+//#endif
+
+#ifdef Q_OS_MACOS
+    // in macOS GUI apps, `/usr/local/bin` is not in PATH by default
+    // follow the Unix way by prepending it to `/usr/bin`
+    {
+        QStringList pathList = getExecutableSearchPaths();
+        if (!pathList.contains("/usr/local/bin")) {
+            auto idxUsrBin = pathList.indexOf("/usr/bin");
+            if (idxUsrBin >= 0)
+                pathList.insert(idxUsrBin, "/usr/local/bin");
+            else
+                pathList.append("/usr/local/bin");
+        }
+        QString newPath = pathList.join(PATH_SEPARATOR);
+        qputenv("PATH", newPath.toUtf8());
+    }
 #endif
 
     QApplication app(argc, argv);
 
     app.setAttribute(Qt::AA_UseHighDpiPixmaps);
 
-    QFile tempFile(QDir::tempPath()+QDir::separator()+"RedPandaDevCppStartUp.lock");
+    ExternalResource resource;
+
+    QLockFile lockFile(QDir::tempPath()+QDir::separator()+"RedPandaDevCppStartUp.lock");
     {
         bool firstRun;
         QString settingFilename = getSettingFilename(QString(), firstRun);
@@ -270,9 +300,8 @@ int main(int argc, char *argv[])
         if (openInSingleInstance) {
             int openCount = 0;
             while (true) {
-                if (tempFile.open(QFile::NewOnly))
+                if (lockFile.tryLock(100))
                     break;
-                QThread::msleep(100);
                 openCount++;
                 if (openCount>100)
                     break;
@@ -281,7 +310,7 @@ int main(int argc, char *argv[])
             if (app.arguments().length()>=2 && openCount<100) {
 #ifdef Q_OS_WIN
                 if (sendFilesToInstance()) {
-                    tempFile.remove();
+                    lockFile.unlock();
                     return 0;
                 }
 #endif
@@ -296,7 +325,7 @@ int main(int argc, char *argv[])
         QDir::setCurrent(QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation)[0]);
     }
     if (settingFilename.isEmpty()) {
-        tempFile.remove();
+        lockFile.unlock();
         return -1;
     }
     QString language;
@@ -315,6 +344,7 @@ int main(int argc, char *argv[])
             app.installTranslator(&transQt);
         }
     }
+    qRegisterMetaType<POJProblem>("POJProblem");
     qRegisterMetaType<PCompileIssue>("PCompileIssue");
     qRegisterMetaType<PCompileIssue>("PCompileIssue&");
     qRegisterMetaType<QVector<int>>("QVector<int>");
@@ -342,10 +372,7 @@ int main(int argc, char *argv[])
         if (firstRun) {
             //set theme
             ChooseThemeDialog themeDialog;
-#ifdef Q_OS_WINDOWS
-            // Qt's default style on Windows is not good.
-            themeDialog.hideAutoFollowSystemTheme();
-#endif
+            themeDialog.setFont(QFont(defaultUiFont(),11));
             themeDialog.exec();
             switch (themeDialog.theme()) {
             case ChooseThemeDialog::Theme::AutoFollowSystem:
@@ -365,7 +392,9 @@ int main(int argc, char *argv[])
             pSettings->editor().save();
 
             //auto detect git in path
+#ifdef ENABLE_VCS
             pSettings->vcs().detectGitInPath();
+#endif
         }
         //Color scheme settings must be loaded after translation
         ColorManager colorManager;
@@ -382,15 +411,13 @@ int main(int argc, char *argv[])
                                   e.reason(),
                                   QMessageBox::Ok);
         }
+        // qDebug()<<"Load font";
+        QFontDatabase::addApplicationFont(":/fonts/asciicontrol.ttf");
 
         MainWindow mainWindow;
         pMainWindow = &mainWindow;
-#if QT_VERSION_MAJOR==5 && QT_VERSION_MINOR < 15
-        setScreenDPI(qApp->primaryScreen()->logicalDotsPerInch());
-#else
         if (mainWindow.screen())
             setScreenDPI(mainWindow.screen()->logicalDotsPerInch());
-#endif
         mainWindow.show();
         if (app.arguments().count()>1) {
             QStringList filesToOpen = app.arguments();
@@ -413,9 +440,8 @@ int main(int argc, char *argv[])
         WindowLogoutEventFilter filter;
         app.installNativeEventFilter(&filter);
 #endif
-        if (tempFile.isOpen()) {
-            tempFile.close();
-            tempFile.remove();
+        if (lockFile.isLocked()) {
+            lockFile.unlock();
         }
 
         int retCode = app.exec();
@@ -428,7 +454,7 @@ int main(int argc, char *argv[])
         }
         return retCode;
     }  catch (BaseError e) {
-        tempFile.remove();
+        lockFile.unlock();
         QMessageBox::critical(nullptr,QApplication::tr("Error"),e.reason());
         return -1;
     }

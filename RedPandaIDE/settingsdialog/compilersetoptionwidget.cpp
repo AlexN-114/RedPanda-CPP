@@ -20,8 +20,10 @@
 #include "../mainwindow.h"
 #include "compilersetdirectorieswidget.h"
 #include <QMessageBox>
+#include <QProgressDialog>
 #include "../utils.h"
 #include "../iconsmanager.h"
+#include "../systemconsts.h"
 #include <qt_utils/charsetinfo.h>
 #include <QDebug>
 #include <QFileDialog>
@@ -63,7 +65,7 @@ void CompilerSetOptionWidget::init()
 {
     ui->cbEncodingDetails->setVisible(false);
     ui->cbEncoding->clear();
-    ui->cbEncoding->addItem(tr("ANSI"),ENCODING_SYSTEM_DEFAULT);
+    ui->cbEncoding->addItem(tr("System Default(%1)").arg(QString(pCharsetInfoManager->getDefaultSystemEncoding())),ENCODING_SYSTEM_DEFAULT);
     ui->cbEncoding->addItem(tr("UTF-8"),ENCODING_UTF8);
     foreach (const QString& langName, pCharsetInfoManager->languageNames()) {
         ui->cbEncoding->addItem(langName,langName);
@@ -73,12 +75,17 @@ void CompilerSetOptionWidget::init()
 
 
 static void loadCompilerSetSettings(Settings::PCompilerSet pSet, Ui::CompilerSetOptionWidget* ui) {
-    ui->chkAutoAddCharset->setEnabled(pSet->compilerType() != CompilerType::Clang);
-    ui->chkAutoAddCharset->setVisible(pSet->compilerType() != CompilerType::Clang);
-    ui->cbEncoding->setEnabled(pSet->compilerType() != CompilerType::Clang);
-    ui->cbEncoding->setVisible(pSet->compilerType() != CompilerType::Clang);
-    ui->cbEncodingDetails->setEnabled(pSet->compilerType() != CompilerType::Clang);
-    ui->cbEncodingDetails->setVisible(pSet->compilerType() != CompilerType::Clang);
+    bool supportCharset = CompilerInfoManager::supportCovertingCharset(pSet->compilerType());
+    ui->chkAutoAddCharset->setEnabled(supportCharset);
+    ui->cbEncoding->setEnabled(supportCharset);
+    ui->cbEncodingDetails->setEnabled(supportCharset);
+    ui->panelCharset->setVisible(supportCharset);
+    ui->chkAutoAddCharset->setEnabled(supportCharset);
+    ui->chkAutoAddCharset->setVisible(supportCharset);
+
+    bool supportStaticLink = CompilerInfoManager::supportStaticLink(pSet->compilerType());
+    ui->chkStaticLink->setEnabled(supportStaticLink);
+    ui->chkStaticLink->setVisible(supportStaticLink);
 
     ui->chkUseCustomCompilerParams->setChecked(pSet->useCustomCompileParams());
     ui->txtCustomCompileParams->setPlainText(pSet->customCompileParams());
@@ -88,6 +95,8 @@ static void loadCompilerSetSettings(Settings::PCompilerSet pSet, Ui::CompilerSet
     ui->txtCustomLinkParams->setEnabled(pSet->useCustomLinkParams());
     ui->chkAutoAddCharset->setChecked(pSet->autoAddCharsetParams());
     ui->chkStaticLink->setChecked(pSet->staticLink());
+    ui->chkPersistInAutoFind->setChecked(pSet->persistInAutoFind());
+    ui->chkForceEnglishOutput->setChecked(pSet->forceEnglishOutput());
     //rest tabs in the options widget
 
     ui->optionTabs->resetUI(pSet,pSet->compileOptions());
@@ -132,11 +141,42 @@ static void loadCompilerSetSettings(Settings::PCompilerSet pSet, Ui::CompilerSet
     default:
         ui->rbGenerateExecutable->setChecked(true);
     }
+#ifdef ENABLE_SDCC
+    bool isSDCC = (pSet->compilerType()==CompilerType::SDCC);
+    ui->grpCompilationStages->setVisible(!isSDCC);
+    ui->lbPreprocessingSuffix->setVisible(!isSDCC);
+    ui->txtPreprocessingSuffix->setVisible(!isSDCC);
+    ui->lbCompilingSuffix->setVisible(!isSDCC);
+    ui->txtCompilationSuffix->setVisible(!isSDCC);
+    ui->lbExecSuffix->setVisible(!isSDCC);
+    ui->txtExecutableSuffix->setVisible(!isSDCC);
+    ui->lbBinarySuffix->setVisible(isSDCC);
+    ui->cbBinarySuffix->setVisible(isSDCC);
+    if (isSDCC) {
+        ui->cbBinarySuffix->clear();
+        ui->cbBinarySuffix->addItem(SDCC_IHX_SUFFIX);
+        ui->cbBinarySuffix->addItem(SDCC_HEX_SUFFIX);
+        ui->cbBinarySuffix->addItem(SDCC_BIN_SUFFIX);
+        ui->cbBinarySuffix->setCurrentText(pSet->executableSuffix());
+    } else {
+        ui->txtExecutableSuffix->setText(pSet->executableSuffix());
+    }
+#else
+    ui->grpCompilationStages->setVisible(true);
+    ui->lbPreprocessingSuffix->setVisible(true);
+    ui->txtPreprocessingSuffix->setVisible(true);
+    ui->lbCompilingSuffix->setVisible(true);
+    ui->txtCompilationSuffix->setVisible(true);
+    ui->lbExecSuffix->setVisible(true);
+    ui->txtExecutableSuffix->setVisible(true);
+    ui->lbBinarySuffix->setVisible(false);
+    ui->cbBinarySuffix->setVisible(false);
+    ui->txtExecutableSuffix->setText(pSet->executableSuffix());
+#endif
 }
 
 void CompilerSetOptionWidget::doLoad()
 {
-    disconnectInputs();
     ui->cbCompilerSet->clear();
     if (pSettings->compilerSets().size()<=0) {
         ui->btnRenameCompilerSet->setEnabled(false);
@@ -155,7 +195,6 @@ void CompilerSetOptionWidget::doLoad()
     }
     ui->cbCompilerSet->setCurrentIndex(index);
     reloadCurrentCompilerSet();
-    connectInputs();
 }
 
 void CompilerSetOptionWidget::doSave()
@@ -163,6 +202,8 @@ void CompilerSetOptionWidget::doSave()
     if (pSettings->compilerSets().size()>0) {
         saveCurrentCompilerSet();
     }
+    //update default index timestamp
+    pSettings->compilerSets().setDefaultIndex(pSettings->compilerSets().defaultIndex());
     pSettings->compilerSets().saveSets();
     pMainWindow->updateCompilerSet();
 }
@@ -199,6 +240,9 @@ void CompilerSetOptionWidget::saveCurrentCompilerSet()
     pSet->setCustomLinkParams(ui->txtCustomLinkParams->toPlainText().trimmed());
     pSet->setAutoAddCharsetParams(ui->chkAutoAddCharset->isChecked());
     pSet->setStaticLink(ui->chkStaticLink->isChecked());
+    pSet->setPersistInAutoFind(ui->chkPersistInAutoFind->isChecked());
+    pSet->setForceEnglishOutput(ui->chkForceEnglishOutput->isChecked());
+
 
     pSet->setCCompiler(ui->txtCCompiler->text().trimmed());
     pSet->setCppCompiler(ui->txtCppCompiler->text().trimmed());
@@ -231,7 +275,15 @@ void CompilerSetOptionWidget::saveCurrentCompilerSet()
     }
     pSet->setPreprocessingSuffix(ui->txtPreprocessingSuffix->text());
     pSet->setCompilationProperSuffix(ui->txtCompilationSuffix->text());
+#ifdef ENABLE_SDCC
+    if (pSet->compilerType()==CompilerType::SDCC) {
+        pSet->setExecutableSuffix(ui->cbBinarySuffix->currentText());
+    } else {
+        pSet->setExecutableSuffix(ui->txtExecutableSuffix->text());
+    }
+#else
     pSet->setExecutableSuffix(ui->txtExecutableSuffix->text());
+#endif
 }
 
 QString CompilerSetOptionWidget::getBinDir()
@@ -247,20 +299,31 @@ QString CompilerSetOptionWidget::getBinDir()
 void CompilerSetOptionWidget::on_btnFindCompilers_clicked()
 {
 #ifdef Q_OS_WIN
-        QString msg = tr("Red Panda C++ will clear current compiler list and search"
-                      " for compilers in the following locations:<br /> '%1'<br /> '%2'<br />Are you really want to continue?")
+        QString msg = tr("Red Panda C++ will clear previously found compiler list and search"
+                      " for compilers in the following locations:<br /> '%1'<br /> '%2'<br />Do you really want to continue?")
                                  .arg(includeTrailingPathDelimiter(pSettings->dirs().appDir()) + "MinGW32")
                                  .arg(includeTrailingPathDelimiter(pSettings->dirs().appDir()) + "MinGW64");
 #else
-        QString msg = tr("Red Panda C++ will clear current compiler list and search"
-                      " for compilers in the the PATH. <br />Are you really want to continue?");
+        QString msg = tr("Red Panda C++ will clear previously found compiler list and search"
+                      " for compilers in the the PATH. <br />Do you really want to continue?");
 #endif
     if (QMessageBox::warning(this,tr("Confirm"),msg,
                                  QMessageBox::Ok | QMessageBox::Cancel) != QMessageBox::Ok )
         return;
-    pSettings->compilerSets().clearSets();
+    QProgressDialog progressDlg(
+                tr("Searching for compilers..."),
+                tr("Abort"),
+                0,
+                1,
+                pMainWindow);
+
+    progressDlg.setWindowModality(Qt::WindowModal);
+    progressDlg.setMaximum(2);
+    progressDlg.setLabelText(tr("Searching..."));
     pSettings->compilerSets().findSets();
+    progressDlg.setValue(1);
     doLoad();
+    progressDlg.setValue(2);
     setSettingsChanged();
     if (pSettings->compilerSets().size()==0) {
         QMessageBox::warning(this,tr("Failed"),tr("Can't find any compiler."));
@@ -270,15 +333,16 @@ void CompilerSetOptionWidget::on_btnFindCompilers_clicked()
 void CompilerSetOptionWidget::on_btnAddBlankCompilerSet_clicked()
 {
     QString name = QInputDialog::getText(this,tr("Compiler Set Name"),tr("Name"));
-    pSettings->compilerSets().addSet();
+    Settings::PCompilerSet set = pSettings->compilerSets().addSet();
     pSettings->compilerSets().setDefaultIndex(pSettings->compilerSets().size()-1);
-    pSettings->compilerSets().defaultSet()->setName(name);
+    set->setName(name);
+    set->setPersistInAutoFind(true);
     doLoad();
 }
 
 void CompilerSetOptionWidget::on_btnAddCompilerSetByFolder_clicked()
 {
-    QString folder = QFileDialog::getExistingDirectory(this, tr("Compiler Set Folder"));
+    QString folder = QFileDialog::getExistingDirectory(this, tr("Compiler Folder"));
     int oldSize = pSettings->compilerSets().size();
 
     if (!pSettings->compilerSets().addSets(folder)) {
@@ -322,16 +386,17 @@ void CompilerSetOptionWidget::updateIcons(const QSize& /*size*/)
 {
     pIconsManager->setIcon(ui->btnFindCompilers, IconsManager::ACTION_EDIT_SEARCH);
     pIconsManager->setIcon(ui->btnAddCompilerSetByFolder, IconsManager::ACTION_FILE_OPEN_FOLDER);
+    pIconsManager->setIcon(ui->btnAddCompilerSetByFile, IconsManager::ACTION_FILE_LOCATE);
     pIconsManager->setIcon(ui->btnAddBlankCompilerSet, IconsManager::ACTION_MISC_ADD);
     pIconsManager->setIcon(ui->btnRemoveCompilerSet, IconsManager::ACTION_MISC_REMOVE);
     pIconsManager->setIcon(ui->btnRenameCompilerSet, IconsManager::ACTION_MISC_RENAME);
 
-    pIconsManager->setIcon(ui->btnChooseCCompiler, IconsManager::ACTION_FILE_OPEN_FOLDER);
-    pIconsManager->setIcon(ui->btnChooseCppCompiler, IconsManager::ACTION_FILE_OPEN_FOLDER);
-    pIconsManager->setIcon(ui->btnChooseGDB, IconsManager::ACTION_FILE_OPEN_FOLDER);
-    pIconsManager->setIcon(ui->btnChooseGDBServer, IconsManager::ACTION_FILE_OPEN_FOLDER);
-    pIconsManager->setIcon(ui->btnChooseMake, IconsManager::ACTION_FILE_OPEN_FOLDER);
-    pIconsManager->setIcon(ui->btnChooseResourceCompiler, IconsManager::ACTION_FILE_OPEN_FOLDER);
+    pIconsManager->setIcon(ui->btnChooseCCompiler, IconsManager::ACTION_FILE_LOCATE);
+    pIconsManager->setIcon(ui->btnChooseCppCompiler, IconsManager::ACTION_FILE_LOCATE);
+    pIconsManager->setIcon(ui->btnChooseGDB, IconsManager::ACTION_FILE_LOCATE);
+    pIconsManager->setIcon(ui->btnChooseGDBServer, IconsManager::ACTION_FILE_LOCATE);
+    pIconsManager->setIcon(ui->btnChooseMake, IconsManager::ACTION_FILE_LOCATE);
+    pIconsManager->setIcon(ui->btnChooseResourceCompiler, IconsManager::ACTION_FILE_LOCATE);
 }
 
 void CompilerSetOptionWidget::on_cbEncoding_currentTextChanged(const QString &/*arg1*/)
@@ -365,7 +430,7 @@ void CompilerSetOptionWidget::on_btnChooseCCompiler_clicked()
                 this,
                 tr("Locate C Compiler"),
                 getBinDir(),
-                tr("Executable files (*.exe)"));
+                pSystemConsts->executableFileFilter());
     if (fileExists(fileName))
         ui->txtCCompiler->setText(fileName);
 }
@@ -377,7 +442,7 @@ void CompilerSetOptionWidget::on_btnChooseCppCompiler_clicked()
                 this,
                 tr("Locate C++ Compiler"),
                 getBinDir(),
-                tr("Executable files (*.exe)"));
+                pSystemConsts->executableFileFilter());
     if (fileExists(fileName))
         ui->txtCppCompiler->setText(fileName);
 }
@@ -389,7 +454,7 @@ void CompilerSetOptionWidget::on_btnChooseMake_clicked()
                 this,
                 tr("Locate Make"),
                 getBinDir(),
-                tr("Executable files (*.exe)"));
+                pSystemConsts->executableFileFilter());
     if (fileExists(fileName))
         ui->txtMake->setText(fileName);
 }
@@ -401,7 +466,7 @@ void CompilerSetOptionWidget::on_btnChooseGDB_clicked()
                 this,
                 tr("Locate GDB"),
                 getBinDir(),
-                tr("Executable files (*.exe)"));
+                pSystemConsts->executableFileFilter());
     if (fileExists(fileName))
         ui->txtDebugger->setText(fileName);
 }
@@ -413,7 +478,7 @@ void CompilerSetOptionWidget::on_btnChooseGDBServer_clicked()
                 this,
                 tr("Locate GDB Server"),
                 getBinDir(),
-                tr("Executable files (*.exe)"));
+                pSystemConsts->executableFileFilter());
     if (fileExists(fileName))
         ui->txtGDBServer->setText(fileName);
 }
@@ -422,11 +487,24 @@ void CompilerSetOptionWidget::on_btnChooseGDBServer_clicked()
 void CompilerSetOptionWidget::on_btnChooseResourceCompiler_clicked()
 {
     QString fileName = QFileDialog::getOpenFileName(
-                this,
-                tr("Locate windres"),
-                getBinDir(),
-                tr("Executable files (*.exe)"));
+        this,
+        tr("Locate windres"),
+        getBinDir(),
+        pSystemConsts->executableFileFilter());
     if (fileExists(fileName))
         ui->txtResourceCompiler->setText(fileName);
+}
+
+
+void CompilerSetOptionWidget::on_btnAddCompilerSetByFile_clicked()
+{
+    QString file = QFileDialog::getOpenFileName(this, tr("Compiler"));
+    if (file.isEmpty())
+        return;
+    QFileInfo fileInfo(file);
+    if (!fileInfo.isExecutable())
+        return;
+    pSettings->compilerSets().addSets(fileInfo.absolutePath(), fileInfo.fileName());
+    doLoad();
 }
 

@@ -25,7 +25,7 @@
 #endif
 
 
-OJProblemCasesRunner::OJProblemCasesRunner(const QString& filename, const QString& arguments, const QString& workDir,
+OJProblemCasesRunner::OJProblemCasesRunner(const QString& filename, const QStringList& arguments, const QString& workDir,
                                            const QVector<POJProblemCase>& problemCases, QObject *parent):
     Runner(filename,arguments,workDir,parent),
     mExecTimeout(0),
@@ -37,7 +37,7 @@ OJProblemCasesRunner::OJProblemCasesRunner(const QString& filename, const QStrin
     setWaitForFinishTime(100);
 }
 
-OJProblemCasesRunner::OJProblemCasesRunner(const QString& filename, const QString& arguments, const QString& workDir,
+OJProblemCasesRunner::OJProblemCasesRunner(const QString& filename, const QStringList& arguments, const QString& workDir,
                                            POJProblemCase problemCase, QObject *parent):
     Runner(filename,arguments,workDir,parent),
     mExecTimeout(0),
@@ -64,7 +64,7 @@ void OJProblemCasesRunner::runCase(int index,POJProblemCase problemCase)
     QElapsedTimer elapsedTimer;
     bool execTimeouted = false;
     process.setProgram(mFilename);
-    process.setArguments(splitProcessCommand(mArguments));
+    process.setArguments(mArguments);
     process.setWorkingDirectory(mWorkDir);
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     QString path = env.value("PATH");
@@ -84,7 +84,7 @@ void OJProblemCasesRunner::runCase(int index,POJProblemCase problemCase)
     env.insert("PATH",path);
     process.setProcessEnvironment(env);
     if (pSettings->executor().redirectStderrToToolLog()) {
-        emit logStderrOutput("\n");
+        emit logStderrOutput("\n"+tr("--- stderr from %1 ---").arg(problemCase->name)+"\n");
     } else {
         process.setProcessChannelMode(QProcess::MergedChannels);
         process.setReadChannel(QProcess::StandardOutput);
@@ -107,7 +107,7 @@ void OJProblemCasesRunner::runCase(int index,POJProblemCase problemCase)
         if (fileExists(problemCase->inputFileName))
             process.write(readFileToByteArray(problemCase->inputFileName));
         else
-            process.write(problemCase->input.toUtf8());
+            process.write(problemCase->input.toLocal8Bit());
         process.waitForFinished(0);
     }
 
@@ -160,7 +160,7 @@ void OJProblemCasesRunner::runCase(int index,POJProblemCase problemCase)
         counter.cb = sizeof(counter);
         if (GetProcessMemoryInfo(hProcess,&counter,
                                  sizeof(counter))){
-            problemCase->runningMemory = counter.PeakWorkingSetSize;
+            problemCase->runningMemory = counter.PeakPagefileUsage;
         }
         FILETIME creationTime;
         FILETIME exitTime;

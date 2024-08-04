@@ -22,10 +22,6 @@
      <property name="text">
       <string>Open in browser</string>
      </property>
-     <property name="icon">
-      <iconset resource="../icons.qrc">
-       <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
-     </property>
     </widget>
    </item>
    <item row="5" column="0">
@@ -89,10 +85,6 @@
      <property name="text">
       <string>Open in browser</string>
      </property>
-     <property name="icon">
-      <iconset resource="../icons.qrc">
-       <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
-     </property>
     </widget>
    </item>
    <item row="0" column="0">
@@ -127,16 +119,19 @@
      <property name="text">
       <string>Open in browser</string>
      </property>
-     <property name="icon">
-      <iconset resource="../icons.qrc">
-       <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
-     </property>
     </widget>
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="../icons.qrc"/>
- </resources>
+ <tabstops>
+  <tabstop>txtConfigFolder</tabstop>
+  <tabstop>btnOpenConfigFolderInBrowser</tabstop>
+  <tabstop>txtThemeFolder</tabstop>
+  <tabstop>btnOpenThemeFolderInFileBrowser</tabstop>
+  <tabstop>txtIconSetFolder</tabstop>
+  <tabstop>btnOpenIconSetFolderInFileBrowser</tabstop>
+  <tabstop>btnResetDefault</tabstop>
+ </tabstops>
+ <resources/>
  <connections/>
 </ui>

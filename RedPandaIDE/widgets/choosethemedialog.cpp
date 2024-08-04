@@ -22,6 +22,11 @@ ChooseThemeDialog::ChooseThemeDialog(QWidget *parent) :
     ui(new Ui::ChooseThemeDialog)
 {
     ui->setupUi(this);
+#ifdef ENABLE_LUA_ADDON
+    ui->rbAuto->setVisible(true);
+#else
+    ui->rbAuto->setVisible(false);
+#endif
     ui->rbDark->setChecked(true);
     ui->rbCpp->setChecked(true);
 }
@@ -33,8 +38,10 @@ ChooseThemeDialog::~ChooseThemeDialog()
 
 ChooseThemeDialog::Theme ChooseThemeDialog::theme()
 {
+#ifdef ENABLE_LUA_ADDON
     if (ui->rbAuto->isChecked())
         return Theme::AutoFollowSystem;
+#endif
     if (ui->rbDark->isChecked())
         return Theme::Dark;
     if (ui->rbLight->isChecked())
@@ -50,9 +57,4 @@ ChooseThemeDialog::Language ChooseThemeDialog::language()
 void ChooseThemeDialog::on_btnOk_clicked()
 {
     accept();
-}
-
-void ChooseThemeDialog::hideAutoFollowSystemTheme()
-{
-    ui->rbAuto->hide();
 }

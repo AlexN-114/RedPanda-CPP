@@ -19,15 +19,25 @@
 #include <QTextCodec>
 #include <algorithm>
 #include "utils.h"
+#include "utils/escape.h"
+#include "utils/font.h"
+#include "utils/parsearg.h"
 #include <QDir>
 #include "systemconsts.h"
 #include <QDebug>
 #include <QMessageBox>
 #include <QStandardPaths>
 #include <QScreen>
-#include <QDesktopWidget>
+#include <QRegularExpression>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #ifdef Q_OS_LINUX
 #include <sys/sysinfo.h>
+#endif
+#ifdef ENABLE_LUA_ADDON
+# include "addon/executor.h"
+# include "addon/runtime.h"
 #endif
 
 const char ValueToChar[28] = {'0', '1', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
@@ -48,7 +58,9 @@ Settings::Settings(const QString &filename):
     mCodeCompletion(this),
     mCodeFormatter(this),
     mUI(this),
+#ifdef ENABLE_VCS
     mVCS(this),
+#endif
     mLanguages(this)
 {
     //load();
@@ -112,7 +124,9 @@ void Settings::load()
     mCodeFormatter.load();
     mUI.load();
     mDirs.load();
+#ifdef ENABLE_VCS
     mVCS.load();
+#endif
     mLanguages.load();
 }
 
@@ -172,10 +186,12 @@ Settings::UI &Settings::ui()
     return mUI;
 }
 
+#ifdef ENABLE_VCS
 Settings::VCS &Settings::vcs()
 {
     return mVCS;
 }
+#endif
 
 Settings::Debugger& Settings::debugger()
 {
@@ -196,13 +212,13 @@ QString Settings::Dirs::appResourceDir() const
 {
 #ifdef Q_OS_WIN
     return appDir();
-#elif defined(Q_OS_LINUX)
-    // in AppImage PREFIX is not true, resolve from relative path
-    const static QString absoluteResourceDir(QDir(appDir()).absoluteFilePath("../share/" APP_NAME));
-    return absoluteResourceDir;
 #elif defined(Q_OS_MACOS)
 //    return QApplication::instance()->applicationDirPath();
     return "";
+#else // XDG desktop
+    // in AppImage or tarball PREFIX is not true, resolve from relative path
+    const static QString absoluteResourceDir(QDir(appDir()).absoluteFilePath("../share/" APP_NAME));
+    return absoluteResourceDir;
 #endif
 }
 
@@ -211,13 +227,13 @@ QString Settings::Dirs::appLibexecDir() const
 {
 #ifdef Q_OS_WIN
     return appDir();
-#elif defined(Q_OS_LINUX)
-    // in AppImage LIBEXECDIR is not true, resolve from relative path
+#elif defined(Q_OS_MACOS)
+    return QApplication::instance()->applicationDirPath();
+#else // XDG desktop
+    // in AppImage or tarball LIBEXECDIR is not true, resolve from relative path
     const static QString relativeLibExecDir(QDir(PREFIX "/bin").relativeFilePath(LIBEXECDIR "/" APP_NAME));
     const static QString absoluteLibExecDir(QDir(appDir()).absoluteFilePath(relativeLibExecDir));
     return absoluteLibExecDir;
-#elif defined(Q_OS_MACOS)
-    return QApplication::instance()->applicationDirPath();
 #endif
 }
 
@@ -234,11 +250,11 @@ QString Settings::Dirs::data(Settings::Dirs::DataType dataType) const
     case DataType::None:
         return dataDir;
     case DataType::ColorScheme:
-        return ":/colorschemes/colorschemes";
+        return ":/resources/colorschemes";
     case DataType::IconSet:
         return ":/resources/iconsets";
     case DataType::Theme:
-        return ":/themes";
+        return ":/resources/themes";
     case DataType::Template:
         return includeTrailingPathDelimiter(appResourceDir()) + "templates";
     }
@@ -254,13 +270,13 @@ QString Settings::Dirs::config(Settings::Dirs::DataType dataType) const
     case DataType::None:
         return configDir;
     case DataType::ColorScheme:
-        return includeTrailingPathDelimiter(configDir)+"scheme";
+        return QFileInfo{includeTrailingPathDelimiter(configDir)+"scheme"}.absoluteFilePath();
     case DataType::IconSet:
-        return includeTrailingPathDelimiter(configDir)+"iconsets";
+        return QFileInfo{includeTrailingPathDelimiter(configDir)+"iconsets"}.absoluteFilePath();
     case DataType::Theme:
-        return includeTrailingPathDelimiter(configDir)+"themes";
+        return QFileInfo{includeTrailingPathDelimiter(configDir)+"themes"}.absoluteFilePath();
     case DataType::Template:
-        return includeTrailingPathDelimiter(configDir) + "templates";
+        return QFileInfo{includeTrailingPathDelimiter(configDir) + "templates"}.absoluteFilePath();
     }
     return "";
 }
@@ -653,14 +669,19 @@ void Settings::Editor::setEnableLigaturesSupport(bool newEnableLigaturesSupport)
     mEnableLigaturesSupport = newEnableLigaturesSupport;
 }
 
-const QString &Settings::Editor::nonAsciiFontName() const
+QStringList Settings::Editor::fontFamilies() const
 {
-    return mNonAsciiFontName;
+    return mFontFamilies;
 }
 
-void Settings::Editor::setNonAsciiFontName(const QString &newNonAsciiFontName)
+void Settings::Editor::setFontFamilies(const QStringList &newFontFamilies)
 {
-    mNonAsciiFontName = newNonAsciiFontName;
+    mFontFamilies = newFontFamilies;
+}
+
+QStringList Settings::Editor::fontFamiliesWithControlFont() const
+{
+    return mFontFamilies + QStringList{"Red Panda Control"};
 }
 
 int Settings::Editor::mouseSelectionScrollSpeed() const
@@ -681,26 +702,6 @@ bool Settings::Editor::autoDetectFileEncoding() const
 void Settings::Editor::setAutoDetectFileEncoding(bool newAutoDetectFileEncoding)
 {
     mAutoDetectFileEncoding = newAutoDetectFileEncoding;
-}
-
-int Settings::Editor::undoLimit() const
-{
-    return mUndoLimit;
-}
-
-void Settings::Editor::setUndoLimit(int newUndoLimit)
-{
-    mUndoLimit = newUndoLimit;
-}
-
-int Settings::Editor::undoMemoryUsage() const
-{
-    return mUndoMemoryUsage;
-}
-
-void Settings::Editor::setUndoMemoryUsage(int newUndoMemoryUsage)
-{
-    mUndoMemoryUsage = newUndoMemoryUsage;
 }
 
 bool Settings::Editor::autoFormatWhenSaved() const
@@ -791,6 +792,16 @@ int Settings::Editor::tipsDelay() const
 void Settings::Editor::setTipsDelay(int newTipsDelay)
 {
     mTipsDelay = newTipsDelay;
+}
+
+bool Settings::Editor::forceFixedFontWidth() const
+{
+    return mForceFixedFontWidth;
+}
+
+void Settings::Editor::setForceFixedFontWidth(bool newForceFixedWidth)
+{
+    mForceFixedFontWidth = newForceFixedWidth;
 }
 
 bool Settings::Editor::showTrailingSpaces() const
@@ -1093,36 +1104,6 @@ void Settings::Editor::setCopyRTFUseBackground(bool copyRTFUseBackground)
     mCopyRTFUseBackground = copyRTFUseBackground;
 }
 
-int Settings::Editor::copyLineLimits() const
-{
-    return mCopyLineLimits;
-}
-
-void Settings::Editor::setCopyLineLimits(int copyLineLimits)
-{
-    mCopyLineLimits = copyLineLimits;
-}
-
-int Settings::Editor::copyCharLimits() const
-{
-    return mCopyCharLimits;
-}
-
-void Settings::Editor::setCopyCharLimits(int copyCharLimits)
-{
-    mCopyCharLimits = copyCharLimits;
-}
-
-bool Settings::Editor::copySizeLimit() const
-{
-    return mCopySizeLimit;
-}
-
-void Settings::Editor::setCopySizeLimit(bool copyLimit)
-{
-    mCopySizeLimit = copyLimit;
-}
-
 int Settings::Editor::gutterLeftOffset() const
 {
     return mGutterLeftOffset;
@@ -1223,16 +1204,6 @@ void Settings::Editor::setGutterVisible(bool gutterVisible)
     mGutterVisible = gutterVisible;
 }
 
-bool Settings::Editor::fontOnlyMonospaced() const
-{
-    return mFontOnlyMonospaced;
-}
-
-void Settings::Editor::setFontOnlyMonospaced(bool fontOnlyMonospaced)
-{
-    mFontOnlyMonospaced = fontOnlyMonospaced;
-}
-
 int Settings::Editor::fontSize() const
 {
     return mFontSize;
@@ -1245,22 +1216,7 @@ void Settings::Editor::setFontSize(int fontSize)
 
 QString Settings::Editor::fontName() const
 {
-    return mFontName;
-}
-
-void Settings::Editor::setFontName(const QString &fontName)
-{
-    mFontName = fontName;
-}
-
-bool Settings::Editor::scrollByOneLess() const
-{
-    return mScrollByOneLess;
-}
-
-void Settings::Editor::setScrollByOneLess(bool scrollByOneLess)
-{
-    mScrollByOneLess = scrollByOneLess;
+    return mFontFamilies.length() > 0 ? mFontFamilies[0] : "";
 }
 
 bool Settings::Editor::scrollPastEol() const
@@ -1321,10 +1277,9 @@ void Settings::Editor::doSave()
     saveValue("auto_hide_scroll_bar", mAutoHideScrollbar);
     saveValue("scroll_past_eof", mScrollPastEof);
     saveValue("scroll_past_eol", mScrollPastEol);
-    saveValue("scroll_by_one_less", mScrollByOneLess);
     saveValue("half_page_scroll", mHalfPageScroll);
     saveValue("mouse_wheel_scroll_speed", mMouseWheelScrollSpeed);
-    saveValue("mouse_selection_scroll_speed",mMouseSelectionScrollSpeed);
+    saveValue("mouse_drag_scroll_speed",mMouseSelectionScrollSpeed);
 
     //right edge
     saveValue("show_right_edge_line",mShowRightEdgeLine);
@@ -1333,12 +1288,11 @@ void Settings::Editor::doSave()
 
     //Font
     //font
-    saveValue("font_name", mFontName);
-    saveValue("non_ascii_font_name", mNonAsciiFontName);
+    saveValue("font_families", mFontFamilies);
     saveValue("font_size", mFontSize);
-    saveValue("font_only_monospaced", mFontOnlyMonospaced);
     saveValue("line_spacing",mLineSpacing);
     saveValue("enable_ligatures_support", mEnableLigaturesSupport);
+    saveValue("force_fixed_font_width", mForceFixedFontWidth);
 
     saveValue("show_leading_spaces", mShowLeadingSpaces);
     saveValue("show_trailing_spaces", mShowTrailingSpaces);
@@ -1349,7 +1303,7 @@ void Settings::Editor::doSave()
     saveValue("gutter_visible", mGutterVisible);
     saveValue("gutter_auto_size", mGutterAutoSize);
     saveValue("gutter_left_offset",mGutterLeftOffset);
-    saveValue("gutter_right_offset",mGutterRightOffset);
+    saveValue("gutter_right_offset2",mGutterRightOffset);
     saveValue("gutter_digits_count", mGutterDigitsCount);
     saveValue("gutter_show_line_numbers",mGutterShowLineNumbers);
     saveValue("gutter_add_leading_zero",mGutterAddLeadingZero);
@@ -1360,9 +1314,6 @@ void Settings::Editor::doSave()
     saveValue("gutter_font_only_monospaced",mGutterFontOnlyMonospaced);
 
     //copy
-    saveValue("copy_limit",mCopySizeLimit);
-    saveValue("copy_char_limits",mCopyCharLimits);
-    saveValue("copy_line_limits",mCopyLineLimits);
     saveValue("copy_with_format_as",mCopyWithFormatAs);
     saveValue("copy_rtf_use_background",mCopyRTFUseBackground);
     saveValue("copy_rtf_use_editor_color_scheme",mCopyRTFUseEditorColor);
@@ -1408,8 +1359,6 @@ void Settings::Editor::doSave()
     saveValue("auto_load_last_files",mAutoLoadLastFiles);
     saveValue("default_file_cpp",mDefaultFileCpp);
     saveValue("auto_detect_file_encoding",mAutoDetectFileEncoding);
-    saveValue("undo_limit",mUndoLimit);
-    saveValue("undo_memory_usage", mUndoMemoryUsage);
     saveValue("auto_format_when_saved", mAutoFormatWhenSaved);
     saveValue("remove_trailing_spaces_when_saved",mRemoveTrailingSpacesWhenSaved);
     saveValue("parse_todos",mParseTodos);
@@ -1441,8 +1390,8 @@ void Settings::Editor::doLoad()
     mEnhanceHomeKey = boolValue("enhance_home_key", true);
     mEnhanceEndKey = boolValue("enhance_end_key",true);
     mKeepCaretX = boolValue("keep_caret_x",true);
-    mCaretForInsert = static_cast<QSynedit::EditCaretType>( intValue("caret_for_insert",static_cast<int>(QSynedit::EditCaretType::ctVerticalLine)));
-    mCaretForOverwrite = static_cast<QSynedit::EditCaretType>( intValue("caret_for_overwrite",static_cast<int>(QSynedit::EditCaretType::ctBlock)));
+    mCaretForInsert = static_cast<QSynedit::EditCaretType>( intValue("caret_for_insert",static_cast<int>(QSynedit::EditCaretType::VerticalLine)));
+    mCaretForOverwrite = static_cast<QSynedit::EditCaretType>( intValue("caret_for_overwrite",static_cast<int>(QSynedit::EditCaretType::Block)));
     mCaretUseTextColor = boolValue("caret_use_text_color",true);
     mCaretColor = colorValue("caret_color",Qt::yellow);
 
@@ -1454,10 +1403,9 @@ void Settings::Editor::doLoad()
     mAutoHideScrollbar = boolValue("auto_hide_scroll_bar", false);
     mScrollPastEof = boolValue("scroll_past_eof", true);
     mScrollPastEol = boolValue("scroll_past_eol", false);
-    mScrollByOneLess = boolValue("scroll_by_one_less", false);
     mHalfPageScroll = boolValue("half_page_scroll",false);
     mMouseWheelScrollSpeed = intValue("mouse_wheel_scroll_speed", 3);
-    mMouseSelectionScrollSpeed = intValue("mouse_selection_scroll_speed",1);
+    mMouseSelectionScrollSpeed = intValue("mouse_drag_scroll_speed",10);
 
 
     //right edge
@@ -1466,20 +1414,28 @@ void Settings::Editor::doLoad()
     mRightEdgeLineColor = colorValue("right_edge_line_color",Qt::yellow);
 
     //Editor font
-#ifdef Q_OS_WIN
-    mFontName = stringValue("font_name","consolas");
-    mNonAsciiFontName = stringValue("non_ascii_font_name","consolas");
-#elif defined(Q_OS_MACOS)
-    mFontName = stringValue("font_name","Menlo");
-    mNonAsciiFontName = stringValue("non_ascii_font_name","PingFang SC");
-#else
-    mFontName = stringValue("font_name","Dejavu Sans Mono");
-    mNonAsciiFontName = stringValue("non_ascii_font_name","Dejavu Sans Mono");
-#endif
+    QStringList fontFamilies = stringListValue("font_families", QStringList());
+    if (fontFamilies.empty()) {
+        // backward compatibility: try old font settings
+        QString fontName = stringValue("font_name", "");
+        if (!fontName.isEmpty())
+            fontFamilies.append(fontName);
+        QString nonAsciiFontName = stringValue("non_ascii_font_name", "");
+        if (!nonAsciiFontName.isEmpty())
+            fontFamilies.append(nonAsciiFontName);
+        mFontFamilies = fontFamilies.empty() ? defaultEditorFonts() : fontFamilies;
+    } else {
+        mFontFamilies = fontFamilies;
+    }
     mFontSize = intValue("font_size",12);
-    mFontOnlyMonospaced = boolValue("font_only_monospaced",true);
-    mLineSpacing = doubleValue("line_spacing",1.0);
+    mLineSpacing = doubleValue("line_spacing",1.1);
+    mForceFixedFontWidth = boolValue("force_fixed_font_width", isCjk());
+    // if (mForceFixedFontWidth)
+    //     mEnableLigaturesSupport = false;
+    // else
+    //     mEnableLigaturesSupport = boolValue("enable_ligatures_support", !isZhJa);
     mEnableLigaturesSupport = boolValue("enable_ligatures_support", false);
+
 
     mShowLeadingSpaces = boolValue("show_leading_spaces", false);
     mShowTrailingSpaces = boolValue("show_trailing_spaces", false);
@@ -1490,25 +1446,22 @@ void Settings::Editor::doLoad()
     mGutterVisible = boolValue("gutter_visible",true);
     mGutterAutoSize = boolValue("gutter_auto_size",true);
     mGutterLeftOffset = intValue("gutter_left_offset",6);
-    mGutterRightOffset = intValue("gutter_right_offset",24);
+    mGutterRightOffset = intValue("gutter_right_offset",-1);
+    if (mGutterRightOffset>0)
+        mGutterRightOffset = std::max(0, mGutterRightOffset-20);
+    else
+        mGutterRightOffset = intValue("gutter_right_offset2",4);
     mGutterDigitsCount = intValue("gutter_digits_count",1);
     mGutterShowLineNumbers = boolValue("gutter_show_line_numbers",true);
     mGutterAddLeadingZero = boolValue("gutter_add_leading_zero",false);
     mGutterLineNumbersStartZero = boolValue("gutter_line_numbers_start_zero",false);
     mGutterUseCustomFont = boolValue("gutter_use_custom_font",false);
 
-#ifdef Q_OS_WIN
-    mGutterFontName = stringValue("gutter_font_name","consolas");
-#else
-    mGutterFontName = stringValue("gutter_font_name","Dejavu Sans Mono");
-#endif
+    mGutterFontName = stringValue("gutter_font_name", defaultMonoFont());
     mGutterFontSize = intValue("gutter_font_size",12);
     mGutterFontOnlyMonospaced = boolValue("gutter_font_only_monospaced",true);
 
     //copy
-    mCopySizeLimit = boolValue("copy_limit",false);
-    mCopyCharLimits = intValue("copy_char_limits",100);
-    mCopyLineLimits = intValue("copy_line_limits",100000);
 #ifdef Q_OS_WIN
     mCopyWithFormatAs = intValue("copy_with_format_as",1); //html
 #else
@@ -1564,8 +1517,6 @@ void Settings::Editor::doLoad()
     else
         mDefaultEncoding = value("default_encoding", ENCODING_UTF8).toByteArray();
     mAutoDetectFileEncoding = boolValue("auto_detect_file_encoding",true);
-    mUndoLimit = intValue("undo_limit",0);
-    mUndoMemoryUsage = intValue("undo_memory_usage", 0);
     mAutoFormatWhenSaved = boolValue("auto_format_when_saved", false);
     mRemoveTrailingSpacesWhenSaved = boolValue("remove_trailing_spaces_when_saved",false);
     mParseTodos = boolValue("parse_todos",true);
@@ -1669,6 +1620,8 @@ Settings::CompilerSet::CompilerSet():
     mAutoAddCharsetParams{false},
     mExecCharset{ENCODING_SYSTEM_DEFAULT},
     mStaticLink{false},
+    mPersistInAutoFind{false},
+    mForceEnglishOutput{false},
     mPreprocessingSuffix{DEFAULT_PREPROCESSING_SUFFIX},
     mCompilationProperSuffix{DEFAULT_COMPILATION_SUFFIX},
     mAssemblingSuffix{DEFAULT_ASSEMBLING_SUFFIX},
@@ -1683,6 +1636,8 @@ Settings::CompilerSet::CompilerSet(const QString& compilerFolder, const QString&
     mAutoAddCharsetParams{true},
     mExecCharset{ENCODING_SYSTEM_DEFAULT},
     mStaticLink{true},
+    mPersistInAutoFind{false},
+    mForceEnglishOutput{false},
     mPreprocessingSuffix{DEFAULT_PREPROCESSING_SUFFIX},
     mCompilationProperSuffix{DEFAULT_COMPILATION_SUFFIX},
     mAssemblingSuffix{DEFAULT_ASSEMBLING_SUFFIX},
@@ -1694,13 +1649,23 @@ Settings::CompilerSet::CompilerSet(const QString& compilerFolder, const QString&
 
         setProperties(compilerFolder,c_prog);
 
+        if (mName.isEmpty()) {
+            mFullLoaded = false;
+            return;
+        }
+
         //manually set the directories
-        setDirectories(compilerFolder, mCompilerType);
+        setDirectories(compilerFolder);
 
         setExecutables();
 
         setUserInput();
 
+#ifdef ENABLE_SDCC
+        if (mCompilerType == CompilerType::SDCC) {
+            mExecutableSuffix = SDCC_HEX_SUFFIX;
+        }
+#endif
         mFullLoaded = true;
     } else {
         mFullLoaded = false;
@@ -1731,6 +1696,7 @@ Settings::CompilerSet::CompilerSet(const Settings::CompilerSet &set):
     mTarget{set.mTarget},
     mCompilerType{set.mCompilerType},
 
+
     mUseCustomCompileParams{set.mUseCustomCompileParams},
     mUseCustomLinkParams{set.mUseCustomLinkParams},
     mCustomCompileParams{set.mCustomCompileParams},
@@ -1738,6 +1704,8 @@ Settings::CompilerSet::CompilerSet(const Settings::CompilerSet &set):
     mAutoAddCharsetParams{set.mAutoAddCharsetParams},
     mExecCharset{set.mExecCharset},
     mStaticLink{set.mStaticLink},
+    mPersistInAutoFind{set.mPersistInAutoFind},
+    mForceEnglishOutput{set.mForceEnglishOutput},
 
     mPreprocessingSuffix{set.mPreprocessingSuffix},
     mCompilationProperSuffix{set.mCompilationProperSuffix},
@@ -1747,6 +1715,128 @@ Settings::CompilerSet::CompilerSet(const Settings::CompilerSet &set):
     mCompileOptions{set.mCompileOptions}
 {
 
+}
+
+Settings::CompilerSet::CompilerSet(const QJsonObject &set) :
+    mFullLoaded{true},
+    mCCompiler{set["cCompiler"].toString()},
+    mCppCompiler{set["cxxCompiler"].toString()},
+    mMake{set["make"].toString()},
+    mDebugger{set["debugger"].toString()},
+    mResourceCompiler{set["resourceCompiler"].toString()},
+    mDebugServer{set["debugServer"].toString()},
+
+    mBinDirs{},               // handle later
+    mCIncludeDirs{},          // handle later
+    mCppIncludeDirs{},        // handle later
+    mLibDirs{},               // handle later
+    mDefaultLibDirs{},        // handle later
+    mDefaultCIncludeDirs{},   // handle later
+    mDefaultCppIncludeDirs{}, // handle later
+
+    mDumpMachine{set["dumpMachine"].toString()},
+    mVersion{set["version"].toString()},
+    mType{set["type"].toString()},
+    mName{set["name"].toString()},
+    mTarget{set["target"].toString()},
+    mCompilerType{}, // handle later
+
+    mUseCustomCompileParams{!set["customCompileParams"].toArray().isEmpty()},
+    mUseCustomLinkParams{!set["customLinkParams"].toArray().isEmpty()},
+    mCustomCompileParams{}, // handle later
+    mCustomLinkParams{},    // handle later
+    mAutoAddCharsetParams{!set["execCharset"].toString().isEmpty()},
+    mExecCharset{}, // handle later
+    mStaticLink{set["staticLink"].toBool()},
+    mPersistInAutoFind{false},
+    mForceEnglishOutput{false},
+
+    mPreprocessingSuffix{set["preprocessingSuffix"].toString()},
+    mCompilationProperSuffix{set["compilationProperSuffix"].toString()},
+    mAssemblingSuffix{set["assemblingSuffix"].toString()},
+    mExecutableSuffix{set["executableSuffix"].toString()},
+    mCompilationStage{CompilationStage(set["compilationStage"].toInt())},
+    mCompileOptions{} // handle later
+{
+    for (const QJsonValue &dir : set["binDirs"].toArray())
+        mBinDirs.append(dir.toString());
+    for (const QJsonValue &dir : set["cIncludeDirs"].toArray())
+        mCIncludeDirs.append(dir.toString());
+    for (const QJsonValue &dir : set["cxxIncludeDirs"].toArray())
+        mCppIncludeDirs.append(dir.toString());
+    for (const QJsonValue &dir : set["libDirs"].toArray())
+        mLibDirs.append(dir.toString());
+    for (const QJsonValue &dir : set["defaultLibDirs"].toArray())
+        mDefaultLibDirs.append(dir.toString());
+    for (const QJsonValue &dir : set["defaultCIncludeDirs"].toArray())
+        mDefaultCIncludeDirs.append(dir.toString());
+    for (const QJsonValue &dir : set["defaultCxxIncludeDirs"].toArray())
+        mDefaultCppIncludeDirs.append(dir.toString());
+
+    QString compilerType = set["compilerType"].toString();
+    if (compilerType == "GCC") {
+        mCompilerType = CompilerType::GCC;
+    } else if (compilerType == "GCC_UTF8") {
+        mCompilerType = CompilerType::GCC_UTF8;
+    } else if (compilerType == "Clang") {
+        mCompilerType = CompilerType::Clang;
+    }
+#if ENABLE_SDCC
+    else if (compilerType == "SDCC") {
+        mCompilerType = CompilerType::SDCC;
+    }
+#endif
+    else {
+        mCompilerType = CompilerType::Unknown;
+        mFullLoaded = false;
+    }
+
+    QStringList compileParams;
+    for (const QJsonValue &param : set["customCompileParams"].toArray())
+        compileParams << param.toString();
+    mCustomCompileParams = escapeArgumentsForInputField(compileParams);
+    QStringList linkParams;
+    for (const QJsonValue &param : set["customLinkParams"].toArray())
+        linkParams << param.toString();
+    mCustomLinkParams = escapeArgumentsForInputField(linkParams);
+
+    if (!mAutoAddCharsetParams)
+        mExecCharset = "UTF-8";
+    else
+        mExecCharset = set["execCharset"].toString();
+
+    const static QMap<QString, QString> optionMap = {
+                                                     {CC_CMD_OPT_OPTIMIZE, "ccCmdOptOptimize"},
+                                                     {CC_CMD_OPT_STD, "ccCmdOptStd"},
+                                                     {C_CMD_OPT_STD, "cCmdOptStd"},
+                                                     {CC_CMD_OPT_INSTRUCTION, "ccCmdOptInstruction"},
+
+                                                     {CC_CMD_OPT_POINTER_SIZE, "ccCmdOptPointerSize"},
+
+                                                     {CC_CMD_OPT_DEBUG_INFO, "ccCmdOptDebugInfo"},
+                                                     {CC_CMD_OPT_PROFILE_INFO, "ccCmdOptProfileInfo"},
+                                                     {CC_CMD_OPT_SYNTAX_ONLY, "ccCmdOptSyntaxOnly"},
+
+                                                     {CC_CMD_OPT_INHIBIT_ALL_WARNING, "ccCmdOptInhibitAllWarning"},
+                                                     {CC_CMD_OPT_WARNING_ALL, "ccCmdOptWarningAll"},
+                                                     {CC_CMD_OPT_WARNING_EXTRA, "ccCmdOptWarningExtra"},
+                                                     {CC_CMD_OPT_CHECK_ISO_CONFORMANCE, "ccCmdOptCheckIsoConformance"},
+                                                     {CC_CMD_OPT_WARNING_AS_ERROR, "ccCmdOptWarningAsError"},
+                                                     {CC_CMD_OPT_ABORT_ON_ERROR, "ccCmdOptAbortOnError"},
+                                                     {CC_CMD_OPT_STACK_PROTECTOR, "ccCmdOptStackProtector"},
+                                                     {CC_CMD_OPT_ADDRESS_SANITIZER, "ccCmdOptAddressSanitizer"},
+
+                                                     {CC_CMD_OPT_USE_PIPE, "ccCmdOptUsePipe"},
+                                                     {LINK_CMD_OPT_NO_LINK_STDLIB, "linkCmdOptNoLinkStdlib"},
+                                                     {LINK_CMD_OPT_NO_CONSOLE, "linkCmdOptNoConsole"},
+                                                     {LINK_CMD_OPT_STRIP_EXE, "linkCmdOptStripExe"},
+                                                     };
+    for (const QString &key : optionMap.keys()) {
+        const QString &jsonKey = optionMap[key];
+        QString value = set[jsonKey].toString();
+        if (!value.isEmpty())
+            setCompileOption(key, value);
+    }
 }
 
 void Settings::CompilerSet::resetCompileOptionts()
@@ -1794,7 +1884,7 @@ void Settings::CompilerSet::setCompileOptions(const QMap<QString, QString> optio
     mCompileOptions=options;
 }
 
-QString Settings::CompilerSet::getCompileOptionValue(const QString &key)
+QString Settings::CompilerSet::getCompileOptionValue(const QString &key) const
 {
     return mCompileOptions.value(key,QString());
 }
@@ -2002,7 +2092,7 @@ QStringList &Settings::CompilerSet::defaultCIncludeDirs()
 {
     if (!mFullLoaded && !binDirs().isEmpty()) {
         mFullLoaded=true;
-        setDirectories(binDirs()[0],mCompilerType);
+        setDirectories(binDirs()[0]);
     }
     return mDefaultCIncludeDirs;
 }
@@ -2011,7 +2101,7 @@ QStringList &Settings::CompilerSet::defaultCppIncludeDirs()
 {
     if (!mFullLoaded && !binDirs().isEmpty()) {
         mFullLoaded=true;
-        setDirectories(binDirs()[0],mCompilerType);
+        setDirectories(binDirs()[0]);
     }
     return mDefaultCppIncludeDirs;
 }
@@ -2020,7 +2110,7 @@ QStringList &Settings::CompilerSet::defaultLibDirs()
 {
     if (!mFullLoaded && !binDirs().isEmpty()) {
         mFullLoaded=true;
-        setDirectories(binDirs()[0],mCompilerType);
+        setDirectories(binDirs()[0]);
     }
     return mLibDirs;
 }
@@ -2148,6 +2238,20 @@ static void addExistingDirectory(QStringList& dirs, const QString& directory) {
 
 void Settings::CompilerSet::setProperties(const QString& binDir, const QString& c_prog)
 {
+#ifdef ENABLE_SDCC
+    if (c_prog == SDCC_PROGRAM) {
+        setSDCCProperties(binDir,c_prog);
+    } else {
+#endif
+
+        setGCCProperties(binDir,c_prog);
+#ifdef ENABLE_SDCC
+    }
+#endif
+}
+
+void Settings::CompilerSet::setGCCProperties(const QString& binDir, const QString& c_prog)
+{
     // We have tested before the call
 //    if (!fileExists(c_prog))
 //        return;
@@ -2262,10 +2366,6 @@ void Settings::CompilerSet::setProperties(const QString& binDir, const QString& 
 
     // Add the default directories
     addExistingDirectory(mBinDirs, includeTrailingPathDelimiter(folder) +  "bin");
-//    addExistingDirectory(mDefaultLibDirs, includeTrailingPathDelimiter(folder) + "lib");
-//    addExistingDirectory(mDefaultCIncludeDirs, includeTrailingPathDelimiter(folder) + "include");
-//    addExistingDirectory(mDefaultCppIncludeDirs, includeTrailingPathDelimiter(folder) + "include");
-
     if (!mDumpMachine.isEmpty()) {
         //mingw-w64 bin folder
         addExistingDirectory(mBinDirs,
@@ -2275,6 +2375,40 @@ void Settings::CompilerSet::setProperties(const QString& binDir, const QString& 
     }
 }
 
+#ifdef ENABLE_SDCC
+void Settings::CompilerSet::setSDCCProperties(const QString& binDir, const QString& c_prog)
+{
+    // We have tested before the call
+//    if (!fileExists(c_prog))
+//        return;
+    // Obtain version number and compiler distro etc
+    QStringList arguments;
+    arguments.append("-v");
+    QByteArray output = getCompilerOutput(binDir, c_prog,arguments);
+
+    if (!output.startsWith("SDCC"))
+        return;
+
+    //Target
+    int delimPos = 0;
+    while (delimPos<output.length() && (output[delimPos]>=((char)32)))
+        delimPos++;
+    QString triplet = output.mid(0,delimPos);
+
+    QRegularExpression re("\\s+(\\d+\\.\\d+\\.\\d+)\\s+");
+    QRegularExpressionMatch match = re.match(triplet);
+    if (match.hasMatch())
+        mVersion = match.captured(1);
+    if (mVersion.isEmpty())
+        mName = "SDCC";
+    else
+        mName = "SDCC "+mVersion;
+    mCompilerType=CompilerType::SDCC;
+
+    addExistingDirectory(mBinDirs, binDir);
+}
+#endif
+
 QStringList Settings::CompilerSet::defines(bool isCpp) {
     // get default defines
     QStringList arguments;
@@ -2282,32 +2416,94 @@ QStringList Settings::CompilerSet::defines(bool isCpp) {
     arguments.append("-E");
     arguments.append("-x");
     QString key;
-    if (isCpp) {
-        arguments.append("c++");
-        key=CC_CMD_OPT_STD;
-    } else {
+#ifdef ENABLE_SDCC
+    if (mCompilerType==CompilerType::SDCC) {
         arguments.append("c");
-        key=C_CMD_OPT_STD;
+        arguments.append("-V");
+        key=SDCC_CMD_OPT_PROCESSOR;
+        //language standard
+        PCompilerOption pOption = CompilerInfoManager::getCompilerOption(compilerType(), key);
+        if (pOption) {
+            if (!mCompileOptions[key].isEmpty())
+                arguments.append(pOption->setting + mCompileOptions[key]);
+        }
+        key=SDCC_CMD_OPT_STD;
+        //language standard
+        pOption = CompilerInfoManager::getCompilerOption(compilerType(), key);
+        if (pOption) {
+            if (!mCompileOptions[key].isEmpty())
+                arguments.append(pOption->setting + mCompileOptions[key]);
+        }
+    } else {
+#endif
+        if (isCpp) {
+            arguments.append("c++");
+            key=CC_CMD_OPT_STD;
+        } else {
+            arguments.append("c");
+            key=C_CMD_OPT_STD;
+        }
+        //language standard
+        PCompilerOption pOption = CompilerInfoManager::getCompilerOption(compilerType(), key);
+        if (pOption) {
+            if (!mCompileOptions[key].isEmpty())
+                arguments.append(pOption->setting + mCompileOptions[key]);
+        }
+        pOption = CompilerInfoManager::getCompilerOption(compilerType(), CC_CMD_OPT_DEBUG_INFO);
+        if (pOption && mCompileOptions.contains(CC_CMD_OPT_DEBUG_INFO)) {
+            arguments.append(pOption->setting);
+        }
+#ifdef ENABLE_SDCC
     }
-    //language standard
-    PCompilerOption pOption = CompilerInfoManager::getCompilerOption(compilerType(), key);
-    if (pOption) {
-        if (!mCompileOptions[key].isEmpty())
-            arguments.append(pOption->setting + mCompileOptions[key]);
-    }
+#endif
 
+    if (mUseCustomCompileParams) {
+        QStringList extraParams = parseArgumentsWithoutVariables(mCustomCompileParams);
+        arguments.append(extraParams);
+    }
+    if (arguments.contains("-g3"))
+        arguments.append("-D_DEBUG");
     arguments.append(NULL_FILE);
-    //qDebug()<<arguments;
+
     QFileInfo ccompiler(mCCompiler);
     QByteArray output = getCompilerOutput(ccompiler.absolutePath(),ccompiler.fileName(),arguments);
     // 'cpp.exe -dM -E -x c++ -std=c++17 NUL'
-
+//    qDebug()<<"------------------";
     QStringList result;
-    QList<QByteArray> lines = output.split('\n');
-    for (QByteArray& line:lines) {
-        QByteArray trimmedLine = line.trimmed();
-        if (!trimmedLine.isEmpty()) {
-            result.append(trimmedLine);
+#ifdef ENABLE_SDCC
+    if (mCompilerType==CompilerType::SDCC) {
+        QList<QByteArray> lines = output.split('\n');
+        QByteArray currentLine;
+        for (QByteArray& line:lines) {
+            QByteArray trimmedLine = line.trimmed();
+            if (trimmedLine.startsWith("+")) {
+                currentLine = line;
+                break;
+            }
+        }
+        lines = currentLine.split(' ');
+        for (QByteArray& line:lines) {
+            QByteArray trimmedLine = line.trimmed();
+            if (trimmedLine.startsWith("-D")) {
+                trimmedLine = trimmedLine.mid(2);
+                if (trimmedLine.contains("=")) {
+                    QList<QByteArray> items=trimmedLine.split('=');
+                    result.append(QString("#define %1 %2").arg(QString(items[0]),QString(items[1])));
+                } else {
+                    result.append("#define "+trimmedLine);
+                }
+            }
+        }
+    } else {
+#else
+    {
+#endif
+        QList<QByteArray> lines = output.split('\n');
+        for (QByteArray& line:lines) {
+            QByteArray trimmedLine = line.trimmed();
+            if (!trimmedLine.isEmpty()) {
+                result.append(trimmedLine);
+            }
         }
     }
     return result;
@@ -2329,10 +2525,12 @@ void Settings::CompilerSet::setExecutables()
             mCCompiler =  findProgramInBinDirs(GCC_PROGRAM);
         if (mCppCompiler.isEmpty())
             mCppCompiler = findProgramInBinDirs(GPP_PROGRAM);
-//        if (mDebugger.isEmpty())
-//            mDebugger = findProgramInBinDirs(GDB_PROGRAM);
-//        if (mDebugServer.isEmpty())
-//            mDebugServer = findProgramInBinDirs(GDB_SERVER_PROGRAM);
+#ifdef ENABLE_SDCC
+    } else if (mCompilerType == CompilerType::SDCC) {
+        mCCompiler =  findProgramInBinDirs(SDCC_PROGRAM);
+        if (mCCompiler.isEmpty())
+            mCCompiler =  findProgramInBinDirs(SDCC_PROGRAM);
+#endif
     } else {
         mCCompiler =  findProgramInBinDirs(GCC_PROGRAM);
         mCppCompiler = findProgramInBinDirs(GPP_PROGRAM);
@@ -2340,14 +2538,29 @@ void Settings::CompilerSet::setExecutables()
         mDebugServer = findProgramInBinDirs(GDB_SERVER_PROGRAM);
     }
     mMake = findProgramInBinDirs(MAKE_PROGRAM);
+#ifdef Q_OS_WIN
     mResourceCompiler = findProgramInBinDirs(WINDRES_PROGRAM);
+#endif
 }
 
-void Settings::CompilerSet::setDirectories(const QString& binDir,CompilerType compilerType)
+void Settings::CompilerSet::setDirectories(const QString& binDir)
+{
+#ifdef ENABLE_SDCC
+    if (mCompilerType == CompilerType::SDCC) {
+        setSDCCDirectories(binDir);
+    } else {
+#endif
+        setGCCDirectories(binDir);
+#ifdef ENABLE_SDCC
+    }
+#endif
+}
+
+void Settings::CompilerSet::setGCCDirectories(const QString& binDir)
 {
     QString folder = QFileInfo(binDir).absolutePath();
     QString c_prog;
-    if (compilerType==CompilerType::Clang)
+    if (mCompilerType==CompilerType::Clang)
         c_prog = CLANG_PROGRAM;
     else
         c_prog = GCC_PROGRAM;
@@ -2485,7 +2698,71 @@ void Settings::CompilerSet::setDirectories(const QString& binDir,CompilerType co
     }
 }
 
-int Settings::CompilerSet::mainVersion()
+#ifdef ENABLE_SDCC
+void Settings::CompilerSet::setSDCCDirectories(const QString& binDir)
+{
+    QString folder = QFileInfo(binDir).absolutePath();
+    QString c_prog = SDCC_PROGRAM;
+    // Find default directories
+    // C include dirs
+    QStringList arguments;
+    arguments.clear();
+    arguments.append("--print-search-dirs");
+    QString key = SDCC_CMD_OPT_PROCESSOR;
+    PCompilerOption pOption = CompilerInfoManager::getCompilerOption(compilerType(), key);
+    if (pOption) {
+        if (!mCompileOptions[key].isEmpty())
+            arguments.append(pOption->setting + mCompileOptions[key]);
+    }
+    QByteArray output = getCompilerOutput(binDir,c_prog,arguments);
+
+    //bindirs
+    QByteArray targetStr = QByteArray("programs:");
+    int delimPos1 = output.indexOf(targetStr);
+    int delimPos2 = output.indexOf("datadir:");
+    if (delimPos1 >0 && delimPos2>delimPos1 ) {
+        delimPos1 += targetStr.length();
+        QList<QByteArray> lines = output.mid(delimPos1, delimPos2-delimPos1).split('\n');
+        for (QByteArray& line:lines) {
+            QByteArray trimmedLine = line.trimmed();
+            if (!trimmedLine.isEmpty()) {
+                addExistingDirectory(mBinDirs,trimmedLine);
+            }
+        }
+    }
+
+    targetStr = QByteArray("includedir:");
+    delimPos1 = output.indexOf(targetStr);
+    delimPos2 = output.indexOf("libdir:");
+    if (delimPos1 >0 && delimPos2>delimPos1 ) {
+        delimPos1 += targetStr.length();
+        QList<QByteArray> lines = output.mid(delimPos1, delimPos2-delimPos1).split('\n');
+        for (QByteArray& line:lines) {
+            QByteArray trimmedLine = line.trimmed();
+            if (!trimmedLine.isEmpty()) {
+                addExistingDirectory(mDefaultCIncludeDirs,trimmedLine);
+            }
+        }
+    }
+
+    targetStr = QByteArray("libdir:");
+    delimPos1 = output.indexOf(targetStr);
+    delimPos2 = output.indexOf("libpath:");
+    if (delimPos1 >0 && delimPos2>delimPos1 ) {
+        delimPos1 += targetStr.length();
+        QList<QByteArray> lines = output.mid(delimPos1, delimPos2-delimPos1).split('\n');
+        for (QByteArray& line:lines) {
+            QByteArray trimmedLine = line.trimmed();
+            if (!trimmedLine.isEmpty()) {
+                addExistingDirectory(mDefaultLibDirs,trimmedLine);
+            }
+        }
+    }
+
+}
+#endif
+
+int Settings::CompilerSet::mainVersion() const
 {
     int i = mVersion.indexOf('.');
     if (i<0)
@@ -2498,23 +2775,31 @@ int Settings::CompilerSet::mainVersion()
 
 }
 
-bool Settings::CompilerSet::canCompileC()
+bool Settings::CompilerSet::canCompileC() const
 {
     return fileExists(mCCompiler);
 }
 
-bool Settings::CompilerSet::canCompileCPP()
+bool Settings::CompilerSet::canCompileCPP() const
 {
+#ifdef ENABLE_SDCC
+    if (mCompilerType==CompilerType::SDCC)
+        return false;
+#endif
     return fileExists(mCppCompiler);
 }
 
-bool Settings::CompilerSet::canMake()
+bool Settings::CompilerSet::canMake() const
 {
     return fileExists(mMake);
 }
 
-bool Settings::CompilerSet::canDebug()
+bool Settings::CompilerSet::canDebug() const
 {
+#ifdef ENABLE_SDCC
+    if (mCompilerType==CompilerType::SDCC)
+        return false;
+#endif
     return fileExists(mDebugger);
 }
 
@@ -2522,12 +2807,21 @@ void Settings::CompilerSet::setUserInput()
 {
     mUseCustomCompileParams = false;
     mUseCustomLinkParams = false;
-    mAutoAddCharsetParams = true;
-    mStaticLink = true;
+#ifdef ENABLE_SDCC
+    if (mCompilerType==CompilerType::SDCC) {
+        mAutoAddCharsetParams = false;
+        mStaticLink = false;
+    } else {
+#else
+    {
+#endif
+        mAutoAddCharsetParams = true;
+        mStaticLink = true;
+    }
 }
 
 
-QString Settings::CompilerSet::findProgramInBinDirs(const QString name)
+QString Settings::CompilerSet::findProgramInBinDirs(const QString name) const
 {
     for (const QString& dir : mBinDirs) {
         QFileInfo f(includeTrailingPathDelimiter(dir) + name);
@@ -2553,6 +2847,8 @@ QByteArray Settings::CompilerSet::getCompilerOutput(const QString &binDir, const
 {
     QProcessEnvironment env;
     env.insert("LANG","en");
+    QString path = binDir;
+    env.insert("PATH",path);
     QByteArray result = runAndGetOutput(
                 includeTrailingPathDelimiter(binDir)+binFile,
                 binDir,
@@ -2561,6 +2857,26 @@ QByteArray Settings::CompilerSet::getCompilerOutput(const QString &binDir, const
                 false,
                 env);
     return result.trimmed();
+}
+
+bool Settings::CompilerSet::forceEnglishOutput() const
+{
+    return mForceEnglishOutput;
+}
+
+void Settings::CompilerSet::setForceEnglishOutput(bool newForceEnglishOutput)
+{
+    mForceEnglishOutput = newForceEnglishOutput;
+}
+
+bool Settings::CompilerSet::persistInAutoFind() const
+{
+    return mPersistInAutoFind;
+}
+
+void Settings::CompilerSet::setPersistInAutoFind(bool newPersistInAutoFind)
+{
+    mPersistInAutoFind = newPersistInAutoFind;
 }
 
 Settings::CompilerSet::CompilationStage Settings::CompilerSet::compilationStage() const
@@ -2601,6 +2917,49 @@ bool Settings::CompilerSet::isOutputExecutable()
 bool Settings::CompilerSet::isOutputExecutable(CompilationStage stage)
 {
     return stage == CompilationStage::GenerateExecutable;
+}
+
+bool Settings::CompilerSet::isDebugInfoUsingUTF8() const
+{
+    switch(mCompilerType) {
+    case CompilerType::Clang:
+    case CompilerType::GCC_UTF8:
+        return true;
+    case CompilerType::GCC:
+#ifdef Q_OS_WIN
+        if (mainVersion()>=13) {
+            bool isOk;
+            int productVersion = QSysInfo::productVersion().toInt(&isOk);
+        //    qDebug()<<productVersion<<isOk;
+            if (!isOk) {
+                if (QSysInfo::productVersion().startsWith("7"))
+                    productVersion=7;
+                else if (QSysInfo::productVersion().startsWith("10"))
+                    productVersion=10;
+                else if (QSysInfo::productVersion().startsWith("11"))
+                    productVersion=11;
+                else
+                    productVersion=10;
+            }
+            return productVersion>=10;
+        }
+#else
+        break;
+#endif
+    default:
+        break;
+    }
+    return false;
+}
+
+bool Settings::CompilerSet::forceUTF8() const
+{
+    return CompilerInfoManager::forceUTF8InDebugger(mCompilerType);
+}
+
+bool Settings::CompilerSet::isCompilerInfoUsingUTF8() const
+{
+    return isDebugInfoUsingUTF8();
 }
 
 const QString &Settings::CompilerSet::assemblingSuffix() const
@@ -2723,6 +3082,13 @@ Settings::PCompilerSet Settings::CompilerSets::addSet(const PCompilerSet &pSet)
     return p;
 }
 
+Settings::PCompilerSet Settings::CompilerSets::addSet(const QJsonObject &set)
+{
+    PCompilerSet p = std::make_shared<CompilerSet>(set);
+    mList.push_back(p);
+    return p;
+}
+
 static void set64_32Options(Settings::PCompilerSet pSet) {
     pSet->setCompileOption(CC_CMD_OPT_POINTER_SIZE,"32");
 }
@@ -2742,11 +3108,11 @@ static void setDebugOptions(Settings::PCompilerSet pSet, bool enableAsan = false
     pSet->setCompileOption(CC_CMD_OPT_USE_PIPE, COMPILER_OPTION_ON);
 
     if (enableAsan) {
+#ifdef __aarch64__
+        pSet->setCompileOption(CC_CMD_OPT_ADDRESS_SANITIZER, "hwaddress");
+#else
         pSet->setCompileOption(CC_CMD_OPT_ADDRESS_SANITIZER, "address");
-//        pSet->setCustomCompileParams("-fsanitize=address");
-//        pSet->setUseCustomCompileParams(true);
-//        pSet->setCustomLinkParams("-fsanitize=address");
-//        pSet->setUseCustomLinkParams(true);
+#endif
     }
     //Some windows gcc don't correctly support this
     //pSet->setCompileOption(CC_CMD_OPT_STACK_PROTECTOR, "-strong");
@@ -2761,51 +3127,54 @@ bool Settings::CompilerSets::addSets(const QString &folder, const QString& c_pro
     }
     // Default, release profile
     PCompilerSet baseSet = addSet(folder,c_prog);
-    if (!baseSet)
+    if (!baseSet || baseSet->name().isEmpty())
         return false;
-    QString baseName = baseSet->name();
-    QString platformName;
-    if (isTarget64Bit(baseSet->target())) {
-        if (baseName.startsWith("TDM-GCC ")) {
-            PCompilerSet set= addSet(baseSet);
-            platformName = "32-bit";
-            set->setName(baseName + " " + platformName + " Release");
-            set64_32Options(set);
-            setReleaseOptions(set);
-
-            set = addSet(baseSet);
-            set->setName(baseName + " " + platformName + " Debug");
-            set64_32Options(set);
-            setDebugOptions(set);
-        }
-        platformName = "64-bit";
+#if ENABLE_SDCC
+    if (c_prog == SDCC_PROGRAM) {
+        baseSet->setCompileOption(SDCC_OPT_NOSTARTUP,COMPILER_OPTION_ON);
     } else {
-        platformName = "32-bit";
-    }
+#else
+    {
+#endif
+        QString baseName = baseSet->name();
+        QString platformName;
+        if (isTarget64Bit(baseSet->target())) {
+            if (baseName.startsWith("TDM-GCC ")) {
+                PCompilerSet set= addSet(baseSet);
+                platformName = "32-bit";
+                set->setName(baseName + " " + platformName + " Release");
+                set64_32Options(set);
+                setReleaseOptions(set);
+
+                set = addSet(baseSet);
+                set->setName(baseName + " " + platformName + " Debug");
+                set64_32Options(set);
+                setDebugOptions(set);
+            }
+            platformName = "64-bit";
+        } else {
+            platformName = "32-bit";
+        }
 
 
-    PCompilerSet debugSet = addSet(baseSet);
-    debugSet->setName(baseName + " " + platformName + " Debug");
-    setDebugOptions(debugSet);
+        PCompilerSet debugSet = addSet(baseSet);
+        debugSet->setName(baseName + " " + platformName + " Debug");
+        setDebugOptions(debugSet);
 
-    // Enable ASan compiler set if it is supported and gdb works with ASan.
+        // Enable ASan compiler set if it is supported and gdb works with ASan.
 #ifdef Q_OS_LINUX
-    PCompilerSet debugAsanSet = addSet(baseSet);
-    debugAsanSet->setName(baseName + " " + platformName + " Debug with ASan");
-    setDebugOptions(debugAsanSet, true);
+        PCompilerSet debugAsanSet = addSet(baseSet);
+        debugAsanSet->setName(baseName + " " + platformName + " Debug with ASan");
+        setDebugOptions(debugAsanSet, true);
 #endif
 
-    baseSet->setName(baseName + " " + platformName + " Release");
-    setReleaseOptions(baseSet);
-
-//    baseSet = addSet(folder);
-//    baseSet->setName(baseName + " " + platformName + " Profiling");
-//    baseSet->setCompilerSetType(CompilerSetType::CST_PROFILING);
-//    setProfileOptions(baseSet);
+        baseSet->setName(baseName + " " + platformName + " Release");
+        setReleaseOptions(baseSet);
+    }
 
 #ifdef Q_OS_LINUX
-# if defined(__x86_64__) || __SIZEOF_POINTER__ == 4
-    mDefaultIndex = (int)mList.size() - 1; // x86-64 Linux or 32-bit Unix, default to "debug with ASan"
+# if defined(__x86_64__) || defined(__aarch64__) || __SIZEOF_POINTER__ == 4
+    mDefaultIndex = (int)mList.size() - 1; // x86-64, AArch64 Linux or 32-bit Unix, default to "debug with ASan"
 # else
     mDefaultIndex = (int)mList.size() - 2; // other Unix, where ASan can be very slow, default to "debug"
 # endif
@@ -2819,69 +3188,118 @@ bool Settings::CompilerSets::addSets(const QString &folder, const QString& c_pro
 
 bool Settings::CompilerSets::addSets(const QString &folder)
 {
+    bool found = false;
     if (!directoryExists(folder))
-        return false;
-    if (!fileExists(folder, GCC_PROGRAM) && !fileExists(folder, CLANG_PROGRAM)) {
-        return false;
-    }
+        return found;
     if (fileExists(folder, GCC_PROGRAM)) {
         addSets(folder,GCC_PROGRAM);
+        found=true;
     }
     if (fileExists(folder, CLANG_PROGRAM)) {
         addSets(folder,CLANG_PROGRAM);
+        found=true;
     }
-    return true;
-
+#ifdef ENABLE_SDCC
+    //qDebug()<<folder;
+    if (fileExists(folder, SDCC_PROGRAM)) {
+        addSets(folder,SDCC_PROGRAM);
+        found=true;
+    }
+#endif
+    return found;
 }
 
-void Settings::CompilerSets::clearSets()
+Settings::CompilerSetList Settings::CompilerSets::clearSets()
 {
+    CompilerSetList persisted;
     for (size_t i=0;i<mList.size();i++) {
         mSettings->mSettings.beginGroup(QString(SETTING_COMPILTER_SET).arg(i));
         mSettings->mSettings.remove("");
         mSettings->mSettings.endGroup();
+        if (mList[i]->persistInAutoFind())
+            persisted.push_back(std::move(mList[i]));
     }
     mList.clear();
     mDefaultIndex = -1;
+    return persisted;
 }
 
 void Settings::CompilerSets::findSets()
 {
-    clearSets();
+    CompilerSetList persisted = clearSets();
+    // canonical paths that has been searched.
+    // use canonical paths here to resolve symbolic links.
     QSet<QString> searched;
+
+#ifdef ENABLE_LUA_ADDON
+    QJsonObject compilerHint;
+    if (
+        QFile scriptFile(pSettings->dirs().appLibexecDir() + "/compiler_hint.lua");
+        scriptFile.exists() && scriptFile.open(QFile::ReadOnly)
+    ) {
+        QByteArray script = scriptFile.readAll();
+        try {
+            compilerHint = AddOn::CompilerHintExecutor{}(script);
+        } catch (const AddOn::LuaError &e) {
+            QMessageBox::critical(nullptr,
+                                  QObject::tr("Error executing platform compiler hint add-on"),
+                                  e.reason());
+        }
+        if (!compilerHint.empty()) {
+            QJsonArray compilerList = compilerHint["compilerList"].toArray();
+            for (const QJsonValue &value : compilerList) {
+                addSet(value.toObject());
+            }
+            QJsonArray noSearch = compilerHint["noSearch"].toArray();
+            QString canonicalPath;
+            for (const QJsonValue &value : noSearch) {
+                canonicalPath = QDir(value.toString()).canonicalPath();
+                if (!canonicalPath.isEmpty())
+                    searched.insert(canonicalPath);
+            }
+        }
+    }
+#endif
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     QString path = env.value("PATH");
     QStringList pathList = path.split(PATH_SEPARATOR);
-    QString folder;
+#ifdef Q_OS_WIN
+    pathList = QStringList{
+        mSettings->dirs().appDir() + "/clang64/bin",
+        mSettings->dirs().appDir() + "/mingw64/bin",
+        mSettings->dirs().appDir() + "/mingw32/bin",
+    } + pathList;
+#endif
+    QString folder, canonicalFolder;
     for (int i=pathList.count()-1;i>=0;i--) {
-        folder = pathList[i];
-        if (searched.contains(folder))
+        folder = QDir(pathList[i]).absolutePath();
+        canonicalFolder = QDir(pathList[i]).canonicalPath();
+        if (canonicalFolder.isEmpty())
             continue;
-        searched.insert(folder);
-        if (folder!="/bin") { // /bin/gcc is symbolic link to /usr/bin/gcc
-            addSets(folder);
-        }
+        if (searched.contains(canonicalFolder))
+            continue;
+        searched.insert(canonicalFolder);
+        // but use absolute path to search so compiler set can survive system upgrades.
+        // during search:
+        //   /opt/gcc-13 -> /opt/gcc-13.1.0
+        // after upgrade:
+        //   /opt/gcc-13 -> /opt/gcc-13.2.0
+        addSets(folder);
     }
 
-#ifdef Q_OS_WIN
-    folder = includeTrailingPathDelimiter(mSettings->dirs().appDir())+"MinGW32"+QDir::separator()+"bin";
-    if (!searched.contains(folder)) {
-        addSets(folder);
-        searched.insert(folder);
-    }
-    folder = includeTrailingPathDelimiter(mSettings->dirs().appDir())+"MinGW64"+QDir::separator()+"bin";
-    if (!searched.contains(folder)) {
-        addSets(folder);
-        searched.insert(folder);
-    }
-    folder = includeTrailingPathDelimiter(mSettings->dirs().appDir())+"Clang64"+QDir::separator()+"bin";
-    if (!searched.contains(folder)) {
-        addSets(folder);
-        searched.insert(folder);
+#ifdef ENABLE_LUA_ADDON
+    if (
+        // note that array index starts from 1 in Lua
+        int preferCompilerInLua = compilerHint["preferCompiler"].toInt();
+        preferCompilerInLua >= 1 && preferCompilerInLua <= (int)mList.size()
+    ) {
+        mDefaultIndex = preferCompilerInLua - 1;
     }
 #endif
 
+    for (PCompilerSet &set: persisted)
+        addSet(set);
 }
 
 void Settings::CompilerSets::saveSets()
@@ -2890,11 +3308,13 @@ void Settings::CompilerSets::saveSets()
         saveSet(i);
     }
     if (mDefaultIndex>=(int)mList.size()) {
-        mDefaultIndex = mList.size()-1;
+        setDefaultIndex( mList.size()-1 );
     }
     mSettings->mSettings.beginGroup(SETTING_COMPILTER_SETS);
     mSettings->mSettings.setValue(SETTING_COMPILTER_SETS_DEFAULT_INDEX,mDefaultIndex);
+    mSettings->mSettings.setValue(SETTING_COMPILTER_SETS_DEFAULT_INDEX_TIMESTAMP,mDefaultIndexTimeStamp);
     mSettings->mSettings.setValue(SETTING_COMPILTER_SETS_COUNT,(int)mList.size());
+
     mSettings->mSettings.endGroup();
 }
 
@@ -2902,7 +3322,11 @@ void Settings::CompilerSets::loadSets()
 {
     mList.clear();
     mSettings->mSettings.beginGroup(SETTING_COMPILTER_SETS);
-    mDefaultIndex =mSettings->mSettings.value(SETTING_COMPILTER_SETS_DEFAULT_INDEX,-1).toInt();
+    mDefaultIndex = mSettings->mSettings.value(SETTING_COMPILTER_SETS_DEFAULT_INDEX,-1).toInt();
+    mDefaultIndexTimeStamp = mSettings->mSettings.value(SETTING_COMPILTER_SETS_DEFAULT_INDEX_TIMESTAMP,0).toLongLong();
+    //fix error time
+    if (mDefaultIndexTimeStamp > QDateTime::currentMSecsSinceEpoch())
+        mDefaultIndexTimeStamp = QDateTime::currentMSecsSinceEpoch();
     int listSize = mSettings->mSettings.value(SETTING_COMPILTER_SETS_COUNT,0).toInt();
     mSettings->mSettings.endGroup();
     bool loadError = false;
@@ -2916,7 +3340,7 @@ void Settings::CompilerSets::loadSets()
     }
     if (loadError) {
         mList.clear();
-        mDefaultIndex = -1;
+        setDefaultIndex(-1);
     }
     PCompilerSet pCurrentSet = defaultSet();
     if (pCurrentSet) {
@@ -2956,8 +3380,8 @@ void Settings::CompilerSets::loadSets()
         QString msg = QObject::tr("Compiler set not configuared.")
                 +"<br /><br />"
                 +QObject::tr("Would you like Red Panda C++ to search for compilers in the following locations: <BR />'%1'<BR />'%2'? ")
-                .arg(includeTrailingPathDelimiter(pSettings->dirs().appDir()) + "MinGW32")
-                .arg(includeTrailingPathDelimiter(pSettings->dirs().appDir()) + "MinGW64");
+                .arg(includeTrailingPathDelimiter(pSettings->dirs().appDir()) + "mingw32")
+                .arg(includeTrailingPathDelimiter(pSettings->dirs().appDir()) + "mingw64");
 #else
         QString msg = QObject::tr("Compiler set not configuared.")
                 +"<br /><br />"
@@ -2968,12 +3392,11 @@ void Settings::CompilerSets::loadSets()
                                  QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
             return;
         }
-        clearSets();
         findSets();
         pCurrentSet = defaultSet();
         if (!pCurrentSet) {
             mList.clear();
-            mDefaultIndex = -1;
+            setDefaultIndex(-1);
             saveSets();
             return;
         }
@@ -2986,6 +3409,7 @@ void Settings::CompilerSets::saveDefaultIndex()
 {
     mSettings->mSettings.beginGroup(SETTING_COMPILTER_SETS);
     mSettings->mSettings.setValue(SETTING_COMPILTER_SETS_DEFAULT_INDEX,mDefaultIndex);
+    mSettings->mSettings.setValue(SETTING_COMPILTER_SETS_DEFAULT_INDEX_TIMESTAMP,mDefaultIndexTimeStamp);
     mSettings->mSettings.endGroup();
 }
 
@@ -2998,9 +3422,6 @@ void Settings::CompilerSets::deleteSet(int index)
         mSettings->mSettings.endGroup();
     }
     mList.erase(std::begin(mList)+index);
-    if (mDefaultIndex>=(int)mList.size()) {
-        mDefaultIndex = mList.size()-1;
-    }
     saveSets();
 }
 
@@ -3014,9 +3435,15 @@ int Settings::CompilerSets::defaultIndex() const
     return mDefaultIndex;
 }
 
+qint64 Settings::CompilerSets::defaultIndexTimestamp() const
+{
+    return mDefaultIndexTimeStamp;
+}
+
 void Settings::CompilerSets::setDefaultIndex(int value)
 {
     mDefaultIndex = value;
+    mDefaultIndexTimeStamp = QDateTime::currentMSecsSinceEpoch();
 }
 
 Settings::PCompilerSet Settings::CompilerSets::defaultSet()
@@ -3033,6 +3460,11 @@ Settings::PCompilerSet Settings::CompilerSets::getSet(int index)
 }
 
 void Settings::CompilerSets::savePath(const QString& name, const QString& path) {
+    if (!isGreenEdition()) {
+        mSettings->mSettings.setValue(name, path);
+        return;
+    }
+
     QString s;
     QString prefix1 = excludeTrailingPathDelimiter(mSettings->mDirs.appDir()) + "/";
     QString prefix2 = excludeTrailingPathDelimiter(mSettings->mDirs.appDir()) + QDir::separator();
@@ -3047,6 +3479,11 @@ void Settings::CompilerSets::savePath(const QString& name, const QString& path) 
 }
 
 void Settings::CompilerSets::savePathList(const QString& name, const QStringList& pathList) {
+    if (!isGreenEdition()) {
+        mSettings->mSettings.setValue(name, pathList);
+        return;
+    }
+
     QStringList sl;
     for (const QString& path: pathList) {
         QString s;
@@ -3093,6 +3530,8 @@ void Settings::CompilerSets::saveSet(int index)
     mSettings->mSettings.setValue("AddCharset", pSet->autoAddCharsetParams());
     mSettings->mSettings.setValue("StaticLink", pSet->staticLink());
     mSettings->mSettings.setValue("ExecCharset", pSet->execCharset());
+    mSettings->mSettings.setValue("PersistInAutoFind", pSet->persistInAutoFind());
+    mSettings->mSettings.setValue("forceEnglishOutput", pSet->forceEnglishOutput());
 
     mSettings->mSettings.setValue("preprocessingSuffix", pSet->preprocessingSuffix());
     mSettings->mSettings.setValue("compilationProperSuffix", pSet->compilationProperSuffix());
@@ -3119,6 +3558,7 @@ void Settings::CompilerSets::saveSet(int index)
 
 QString Settings::CompilerSets::loadPath(const QString &name)
 {
+    // always do substitution for backward compatibility
     QString s =  mSettings->mSettings.value(name).toString();
     QString prefix = "%AppPath%/";
     if (s.startsWith(prefix)) {
@@ -3129,6 +3569,7 @@ QString Settings::CompilerSets::loadPath(const QString &name)
 
 void Settings::CompilerSets::loadPathList(const QString &name, QStringList& list)
 {
+    // always do substitution for backward compatibility
     list.clear();
     QStringList sl = mSettings->mSettings.value(name).toStringList();
     QString prefix = "%AppPath%/";
@@ -3165,6 +3606,10 @@ Settings::PCompilerSet Settings::CompilerSets::loadSet(int index)
         pSet->setCompilerType(CompilerType::GCC);
     } else if (temp==COMPILER_GCC_UTF8) {
         pSet->setCompilerType(CompilerType::GCC_UTF8);
+#ifdef ENABLE_SDCC
+    } else if (temp==COMPILER_SDCC) {
+        pSet->setCompilerType(CompilerType::SDCC);
+#endif
     } else {
         pSet->setCompilerType((CompilerType)mSettings->mSettings.value("CompilerType").toInt());
     }
@@ -3176,6 +3621,9 @@ Settings::PCompilerSet Settings::CompilerSets::loadSet(int index)
     pSet->setCustomLinkParams(mSettings->mSettings.value("customLinkParams").toString());
     pSet->setAutoAddCharsetParams(mSettings->mSettings.value("AddCharset", true).toBool());
     pSet->setStaticLink(mSettings->mSettings.value("StaticLink", false).toBool());
+    pSet->setPersistInAutoFind(mSettings->mSettings.value("PersistInAutoFind", false).toBool());
+    bool forceEnglishOutput=QLocale::system().name().startsWith("zh")?false:true;
+    pSet->setForceEnglishOutput(mSettings->mSettings.value("forceEnglishOutput", forceEnglishOutput).toBool());
 
     pSet->setExecCharset(mSettings->mSettings.value("ExecCharset", ENCODING_SYSTEM_DEFAULT).toString());
     if (pSet->execCharset().isEmpty()) {
@@ -3304,31 +3752,14 @@ Settings::Environment::Environment(Settings *settings):_Base(settings, SETTING_E
 
 void Settings::Environment::doLoad()
 {
-    //Appearence
+    //Appearance
     mTheme = stringValue("theme","dark");
-    QString defaultFontName = "Segoe UI";
-    QString defaultLocaleName = QLocale::system().name();
-    if (defaultLocaleName == "zh_CN") {
-        QString fontName;
-#ifdef Q_OS_WINDOWS
-        fontName = "Microsoft Yahei";
-#elif defined(Q_OS_MACOS)
-        fontName = "PingFang SC";
-#elif defined(Q_OS_LINUX)
-        fontName = "Noto Sans CJK";
-#endif
-        QFont font(fontName);
-        if (font.exactMatch()) {
-            defaultFontName = fontName;
-        }
-    }
-    mInterfaceFont = stringValue("interface_font",defaultFontName);
+    mInterfaceFont = stringValue("interface_font", defaultUiFont());
     mInterfaceFontSize = intValue("interface_font_size",11);
     mIconZoomFactor = doubleValue("icon_zoom_factor",1.0);
-    mLanguage = stringValue("language", defaultLocaleName);
+    mLanguage = stringValue("language", QLocale::system().name());
     mIconSet = stringValue("icon_set","contrast");
     mUseCustomIconSet = boolValue("use_custom_icon_set", false);
-    mUseCustomTheme = boolValue("use_custom_theme", false);
 
     mCurrentFolder = stringValue("current_folder",QDir::currentPath());
     if (!fileExists(mCurrentFolder)) {
@@ -3338,94 +3769,50 @@ void Settings::Environment::doLoad()
     if (!fileExists(mDefaultOpenFolder)) {
         mDefaultOpenFolder = QDir::currentPath();
     }
-#ifdef Q_OS_LINUX
 
-#define SYSTEM_TERMINAL(term) "/usr/bin/" #term, "/usr/local/bin/" #term
-    const static QString terminals[] {
-        /* modern, specialized or stylized terminal -- user who installed them are likely to prefer them */
-        SYSTEM_TERMINAL(alacritty),       // GPU-accelerated
-        SYSTEM_TERMINAL(kitty),           // GPU-accelerated
-        SYSTEM_TERMINAL(wayst),           // GPU-accelerated
-        SYSTEM_TERMINAL(tilix),           // tiling
-        SYSTEM_TERMINAL(cool-retro-term), // old CRT style
-
-        /* default terminal for DE */
-        SYSTEM_TERMINAL(konsole),         // KDE
-        SYSTEM_TERMINAL(deepin-terminal), // DDE
-        SYSTEM_TERMINAL(qterminal),       // LXQt
-        SYSTEM_TERMINAL(lxterminal),      // LXDE
-
-        /* bundled terminal in AppImage */
-        "alacritty",
-
-        /* compatible, with minor issue */
-        SYSTEM_TERMINAL(kgx),          // GNOME Console, confirm to quit
-        SYSTEM_TERMINAL(coreterminal), // not so conforming when parsing args
-        SYSTEM_TERMINAL(sakura),       // not so conforming when parsing args
-
-        /* compatible, without out-of-box hidpi support */
-        SYSTEM_TERMINAL(mlterm),
-        SYSTEM_TERMINAL(st),
-        SYSTEM_TERMINAL(terminology), // also not so conforming when parsing args
-        SYSTEM_TERMINAL(urxvt),
-        SYSTEM_TERMINAL(xterm),
-        SYSTEM_TERMINAL(zutty),
-
-        /* fallbacks */
-        SYSTEM_TERMINAL(foot),                // Wayland only
-        SYSTEM_TERMINAL(x-terminal-emulator), // Debian alternatives
-
-        /* parameter incompatible */
-        // "gnome-terminal",
-        // "guake",
-        // "hyper",
-        // "io.elementary.terminal",
-        // "kermit",
-        // "liri-terminal",
-        // "mate-terminal",
-        // "roxterm",
-        // "station",
-        // "terminator",
-        // "termite",
-        // "tilda",
-        // "xfce4-terminal",
-        // "yakuake",
-
-        /* incompatible -- other */
-        // "aterm",       // AUR broken, unable to test
-        // "eterm",       // AUR broken, unable to test
-        // "rxvt",        // no unicode support
-        // "shellinabox", // AUR broken, unable to test
-    };
-#undef SYSTEM_TERMINAL
-
-    auto checkAndSetTerminalPath = [this](QString terminalPath) -> bool {
-        QDir appDir(pSettings->dirs().appDir());
-        QString absoluteTerminalPath = appDir.absoluteFilePath(terminalPath);
-        QFileInfo termPathInfo(absoluteTerminalPath);
-        if (termPathInfo.isFile() && termPathInfo.isReadable() && termPathInfo.isExecutable()) {
-            mTerminalPath = terminalPath;
-            return true;
-        } else {
-            return false;
-        }
-    };
+#ifdef Q_OS_WINDOWS
+# ifdef WINDOWS_PREFER_OPENCONSOLE
+    // prefer UTF-8 compatible OpenConsole.exe
+    mUseCustomTerminal = boolValue("use_custom_terminal", true);
+# else
+    mUseCustomTerminal = boolValue("use_custom_terminal", false);
+# endif
+#else // UNIX
+    mUseCustomTerminal = true;
+#endif
 
     // check saved terminal path
-    if (!checkAndSetTerminalPath(stringValue("terminal_path", ""))) {
-        // if saved terminal path is invalid, try determing terminal from our list
-        for (auto terminal: terminals) {
-            if (checkAndSetTerminalPath(terminal))
+    mTerminalPath = stringValue("terminal_path", "");
+    // always do substitution for backward compatibility
+    mTerminalPath = replacePrefix(mTerminalPath, "%*APP_DIR*%", pSettings->dirs().appDir());
+    mTerminalArgumentsPattern = stringValue("terminal_arguments_pattern", "");
+
+    checkAndSetTerminal();
+
+    mAStylePath = stringValue("astyle_path","");
+    if (mAStylePath.isEmpty()
+            /* compatibily for old configuration */
+            || ( mAStylePath == includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"astyle")
+            ) {
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        QString path = env.value("PATH");
+        QStringList pathList = path.split(PATH_SEPARATOR);
+        pathList = QStringList{
+            mSettings->dirs().appDir(),
+            mSettings->dirs().appLibexecDir(),
+        } + pathList;
+
+        foreach (const QString& folder, pathList) {
+            QDir dir{folder};
+            QFileInfo fileInfo{dir.absoluteFilePath(ASTYLE_PROGRAM)};
+            if (fileInfo.exists()) {
+                mAStylePath = fileInfo.absoluteFilePath();
                 break;
+            }
         }
+        mAStylePath = replacePrefix(mAStylePath, pSettings->dirs().appDir() , "%*APP_DIR*%");
     }
 
-    mAStylePath = includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"astyle";
-#elif defined(Q_OS_MACOS)
-    mTerminalPath = stringValue("terminal_path",
-                                "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal");
-    mAStylePath = includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"astyle";
-#endif
     mHideNonSupportFilesInFileView=boolValue("hide_non_support_files_file_view",true);
     mOpenFilesInSingleInstance = boolValue("open_files_in_single_instance",false);
 }
@@ -3485,17 +3872,6 @@ QString Settings::Environment::terminalPath() const
     return mTerminalPath;
 }
 
-QString Settings::Environment::terminalPathForExec() const
-{
-#ifdef Q_OS_LINUX
-    // `mTerminalPath` can be reletive (bundled terminal in AppImage).
-    QDir appDir(pSettings->dirs().appDir());
-    return appDir.absoluteFilePath(mTerminalPath);
-#else
-    return mTerminalPath;
-#endif
-}
-
 void Settings::Environment::setTerminalPath(const QString &terminalPath)
 {
     mTerminalPath = terminalPath;
@@ -3503,12 +3879,28 @@ void Settings::Environment::setTerminalPath(const QString &terminalPath)
 
 QString Settings::Environment::AStylePath() const
 {
-    return mAStylePath;
+    QString path = mAStylePath;
+    if (path.isEmpty())
+        path = includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"astyle";
+    else
+        path = replacePrefix(path, "%*APP_DIR*%", pSettings->dirs().appDir());
+    return path;
 }
 
 void Settings::Environment::setAStylePath(const QString &aStylePath)
 {
     mAStylePath = aStylePath;
+    mAStylePath = replacePrefix(mAStylePath, pSettings->dirs().appDir() , "%*APP_DIR*%");
+}
+
+QString Settings::Environment::terminalArgumentsPattern() const
+{
+    return mTerminalArgumentsPattern;
+}
+
+void Settings::Environment::setTerminalArgumentsPattern(const QString &argsPattern)
+{
+    mTerminalArgumentsPattern = argsPattern;
 }
 
 bool Settings::Environment::useCustomIconSet() const
@@ -3519,16 +3911,6 @@ bool Settings::Environment::useCustomIconSet() const
 void Settings::Environment::setUseCustomIconSet(bool newUseCustomIconSet)
 {
     mUseCustomIconSet = newUseCustomIconSet;
-}
-
-bool Settings::Environment::useCustomTheme() const
-{
-    return mUseCustomTheme;
-}
-
-void Settings::Environment::setUseCustomTheme(bool newUseCustomTheme)
-{
-    mUseCustomTheme = newUseCustomTheme;
 }
 
 bool Settings::Environment::hideNonSupportFilesInFileView() const
@@ -3561,9 +3943,134 @@ void Settings::Environment::setIconZoomFactor(double newIconZoomFactor)
     mIconZoomFactor = newIconZoomFactor;
 }
 
+QString Settings::Environment::queryPredefinedTerminalArgumentsPattern(const QString &executable) const
+{
+    QString execName = extractFileName(executable);
+    for (const TerminalItem& item: loadTerminalList()) {
+        QString termName = extractFileName(item.terminal);
+        if (termName.compare(execName,PATH_SENSITIVITY)==0) return item.param;
+    }
+    return QString();
+}
+
+bool Settings::Environment::useCustomTerminal() const
+{
+    return mUseCustomTerminal;
+}
+
+void Settings::Environment::setUseCustomTerminal(bool newUseCustomTerminal)
+{
+    mUseCustomTerminal = newUseCustomTerminal;
+}
+
+void Settings::Environment::checkAndSetTerminal()
+{
+    if (isTerminalValid()) return;
+
+    QStringList pathList = getExecutableSearchPaths();
+    QList<TerminalItem> terminalList = loadTerminalList();
+    for (const TerminalItem& termItem:terminalList) {
+        QString term=termItem.terminal;
+        term = replacePrefix(term, "%*APP_DIR*%", pSettings->dirs().appDir());
+        QFileInfo info{term};
+        QString absoluteTerminalPath;
+        if (info.isAbsolute()) {
+            absoluteTerminalPath = info.absoluteFilePath();
+            if(fileExists(absoluteTerminalPath)) {
+                mTerminalPath = absoluteTerminalPath;
+                mTerminalArgumentsPattern = termItem.param;
+                return;
+            }
+        } else {
+            for (const QString &dirPath: pathList) {
+                QDir dir{dirPath};
+                absoluteTerminalPath = dir.absoluteFilePath(termItem.terminal);
+                if(fileExists(absoluteTerminalPath)) {
+                    mTerminalPath = absoluteTerminalPath;
+                    mTerminalArgumentsPattern = termItem.param;
+                    return;
+                }
+            }
+        }
+    }
+    //Can't Find a term
+    QMessageBox::critical(
+                nullptr,
+                QCoreApplication::translate("Settings","Error"),
+        QCoreApplication::translate("Settings","Can't find terminal program!"));
+}
+
+QMap<QString, QString> Settings::Environment::terminalArgsPatternMagicVariables()
+{
+    return mTerminalArgsPatternMagicVariables;
+}
+
+QList<Settings::Environment::TerminalItem> Settings::Environment::loadTerminalList() const
+{
+#ifdef Q_OS_WINDOWS
+    QString terminalListFilename(":/config/terminal-windows.json");
+#else // UNIX
+    QString terminalListFilename(":/config/terminal-unix.json");
+#endif
+    QFile terminalListFile(terminalListFilename);
+    if (!terminalListFile.open(QFile::ReadOnly))
+        throw FileError(QObject::tr("Can't open file '%1' for read.")
+                            .arg(terminalListFilename));
+    QByteArray terminalListContent = terminalListFile.readAll();
+    QJsonDocument terminalListDocument(QJsonDocument::fromJson(terminalListContent));
+
+    QList<Settings::Environment::TerminalItem> result;
+    // determing terminal (if not set yet) and build predefined arguments pattern map from our list
+    for (const auto &terminalGroup: terminalListDocument.array()) {
+        const QJsonArray &terminals = terminalGroup.toObject()["terminals"].toArray();
+        for (const auto &terminal_: terminals) {
+            const QJsonObject& terminal = terminal_.toObject();
+            QString path = terminal["path"].toString();
+            QString termExecutable = QFileInfo(path).fileName();
+            QString pattern = terminal["argsPattern"].toString();
+            Settings::Environment::TerminalItem terminalItem;
+            path = replacePrefix(path, "%*APP_DIR*%", pSettings->dirs().appDir());
+            terminalItem.terminal = path;
+            terminalItem.param = pattern;
+            result.append(terminalItem);
+        }
+    }
+    return result;
+}
+
+bool Settings::Environment::isTerminalValid()
+{
+    // don't use custom terminal
+    if (!mUseCustomTerminal) return true;
+    // terminal patter is empty
+    if (mTerminalArgumentsPattern.isEmpty()) return false;
+
+    QStringList patternItems = parseArguments(mTerminalArgumentsPattern, mTerminalArgsPatternMagicVariables, false);
+
+    if (!(patternItems.contains("$argv")
+          || patternItems.contains("$command")
+          || patternItems.contains("$tmpfile"))) {
+        // program not referenced
+        return false;
+    }
+    QFileInfo termPathInfo{mTerminalPath};
+    if (termPathInfo.isAbsolute()) {
+        return termPathInfo.exists();
+    } else {
+        QStringList pathList = getExecutableSearchPaths();
+        for (const QString &dirName: pathList) {
+            QDir dir{dirName};
+            QString absoluteTerminalPath = dir.absoluteFilePath(mTerminalPath);
+            QFileInfo absTermPathInfo(absoluteTerminalPath);
+            if (absTermPathInfo.exists()) return true;
+        }
+    }
+    return false;
+}
+
 void Settings::Environment::doSave()
 {
-    //Appearence
+    //Appearance
     saveValue("theme", mTheme);
     saveValue("interface_font", mInterfaceFont);
     saveValue("interface_font_size", mInterfaceFontSize);
@@ -3575,10 +4082,21 @@ void Settings::Environment::doSave()
 
     saveValue("current_folder",mCurrentFolder);
     saveValue("default_open_folder",mDefaultOpenFolder);
-#ifndef Q_OS_WIN
-    saveValue("terminal_path",mTerminalPath);
-    saveValue("asyle_path",mAStylePath);
+    QString terminalPath = mTerminalPath;
+    if (isGreenEdition())
+    {
+        // APP_DIR trick for windows portable app
+        // For non-portable app (other platform or Windows installer), multiple instances
+        // share the same configuration and thus the trick may break terminal path
+        terminalPath = replacePrefix(terminalPath, pSettings->dirs().appDir(), "%*APP_DIR*%");
+    }
+
+    saveValue("terminal_path",terminalPath);
+    saveValue("terminal_arguments_pattern",mTerminalArgumentsPattern);
+#ifdef Q_OS_WINDOWS
+    saveValue("use_custom_terminal",mUseCustomTerminal);
 #endif
+    saveValue("astyle_path",mAStylePath);
 
     saveValue("hide_non_support_files_file_view",mHideNonSupportFilesInFileView);
     saveValue("open_files_in_single_instance",mOpenFilesInSingleInstance);
@@ -3603,6 +4121,18 @@ void Settings::Environment::setTheme(const QString &theme)
 {
     mTheme = theme;
 }
+
+const QMap<QString, QString> Settings::Environment::mTerminalArgsPatternMagicVariables = {
+    {"term", "$term"},
+    {"integrated_term", "$integrated_term"},
+    {"argv", "$argv"},
+    {"command", "$command"},
+    {"unix_command", "$unix_command"},
+    {"dos_command", "$dos_command"},
+    {"lpCommandLine", "$lpCommandLine"},
+    {"tmpfile", "$tmpfile"},
+    {"sequential_app_id", "$sequential_app_id"},
+};
 
 Settings::Executor::Executor(Settings *settings):_Base(settings, SETTING_EXECUTOR)
 {
@@ -3669,16 +4199,6 @@ void Settings::Executor::setCompetivieCompanionPort(int newCompetivieCompanionPo
     mCompetivieCompanionPort = newCompetivieCompanionPort;
 }
 
-bool Settings::Executor::ignoreSpacesWhenValidatingCases() const
-{
-    return mIgnoreSpacesWhenValidatingCases;
-}
-
-void Settings::Executor::setIgnoreSpacesWhenValidatingCases(bool newIgnoreSpacesWhenValidatingCases)
-{
-    mIgnoreSpacesWhenValidatingCases = newIgnoreSpacesWhenValidatingCases;
-}
-
 bool Settings::Executor::caseEditorFontOnlyMonospaced() const
 {
     return mCaseEditorFontOnlyMonospaced;
@@ -3727,6 +4247,26 @@ bool Settings::Executor::redirectStderrToToolLog() const
 void Settings::Executor::setRedirectStderrToToolLog(bool newRedirectStderrToToolLog)
 {
     mRedirectStderrToToolLog = newRedirectStderrToToolLog;
+}
+
+ProblemCaseValidateType Settings::Executor::problemCaseValidateType() const
+{
+    return mProblemCaseValidateType;
+}
+
+void Settings::Executor::setProblemCaseValidateType(ProblemCaseValidateType newProblemCaseValidateType)
+{
+    mProblemCaseValidateType = newProblemCaseValidateType;
+}
+
+bool Settings::Executor::enableVirualTerminalSequence() const
+{
+    return mEnableVirualTerminalSequence;
+}
+
+void Settings::Executor::setEnableVirualTerminalSequence(bool newEnableVirualTerminalSequence)
+{
+    mEnableVirualTerminalSequence = newEnableVirualTerminalSequence;
 }
 
 bool Settings::Executor::convertHTMLToTextForInput() const
@@ -3792,6 +4332,9 @@ void Settings::Executor::setEnableProblemSet(bool newEnableProblemSet)
 void Settings::Executor::doSave()
 {
     saveValue("pause_console", mPauseConsole);
+#ifdef Q_OS_WIN
+    saveValue("enable_virtual_terminal_sequence", mEnableVirualTerminalSequence);
+#endif
     saveValue("minimize_on_run", mMinimizeOnRun);
     saveValue("use_params",mUseParams);
     saveValue("params",mParams);
@@ -3803,7 +4346,7 @@ void Settings::Executor::doSave()
     saveValue("competitive_companion_port", mCompetivieCompanionPort);
     saveValue("input_convert_html", mConvertHTMLToTextForInput);
     saveValue("expected_convert_html", mConvertHTMLToTextForExpected);
-    saveValue("ignore_spaces_when_validating_cases", mIgnoreSpacesWhenValidatingCases);
+    saveValue("problem_case_validate_type", (int)mProblemCaseValidateType);
     saveValue("redirect_stderr_to_toollog", mRedirectStderrToToolLog);
     saveValue("case_editor_font_name",mCaseEditorFontName);
     saveValue("case_editor_font_size",mCaseEditorFontSize);
@@ -3827,6 +4370,9 @@ void Settings::Executor::setPauseConsole(bool pauseConsole)
 void Settings::Executor::doLoad()
 {
     mPauseConsole = boolValue("pause_console",true);
+#ifdef Q_OS_WIN
+    mEnableVirualTerminalSequence = boolValue("enable_virtual_terminal_sequence", true);
+#endif
     mMinimizeOnRun = boolValue("minimize_on_run",false);
     mUseParams = boolValue("use_params",false);
     mParams = stringValue("params", "");
@@ -3838,16 +4384,10 @@ void Settings::Executor::doLoad()
     mCompetivieCompanionPort = intValue("competitive_companion_port",10045);
     mConvertHTMLToTextForInput = boolValue("input_convert_html", false);
     mConvertHTMLToTextForExpected = boolValue("expected_convert_html", false);
-    mIgnoreSpacesWhenValidatingCases = boolValue("ignore_spaces_when_validating_cases",false);
+    mProblemCaseValidateType =(ProblemCaseValidateType)intValue("problem_case_validate_type", (int)ProblemCaseValidateType::Exact);
     mRedirectStderrToToolLog = boolValue("redirect_stderr_to_toollog", false);
 
-#ifdef Q_OS_WIN
-    mCaseEditorFontName = stringValue("case_editor_font_name","consolas");
-#elif defined(Q_OS_MACOS)
-    mCaseEditorFontName = stringValue("case_editor_font_name", "Menlo");
-#else
-    mCaseEditorFontName = stringValue("case_editor_font_name","Dejavu Sans Mono");
-#endif
+    mCaseEditorFontName = stringValue("case_editor_font_name", defaultMonoFont());
     mCaseEditorFontSize = intValue("case_editor_font_size",11);
     mCaseEditorFontOnlyMonospaced = boolValue("case_editor_font_only_monospaced",true);
     int case_timeout = intValue("case_timeout", -1);
@@ -4010,6 +4550,16 @@ void Settings::Debugger::setArrayElements(int newArrayElements)
     mArrayElements = newArrayElements;
 }
 
+int Settings::Debugger::characters() const
+{
+    return mCharacters;
+}
+
+void Settings::Debugger::setCharacters(int newCharacters)
+{
+    mCharacters = newCharacters;
+}
+
 bool Settings::Debugger::useIntelStyle() const
 {
     return mUseIntelStyle;
@@ -4059,17 +4609,14 @@ void Settings::Debugger::doSave()
     saveValue("memory_view_rows",mMemoryViewRows);
     saveValue("memory_view_columns",mMemoryViewColumns);
     saveValue("array_elements",mArrayElements);
+    saveValue("string_characters",mCharacters);
 }
 
 void Settings::Debugger::doLoad()
 {
     mEnableDebugConsole = boolValue("enable_debug_console",true);
     mShowDetailLog = boolValue("show_detail_log",false);
-#ifdef Q_OS_WIN
-    mFontName = stringValue("font_name","Consolas");
-#else
-    mFontName = stringValue("font_name","Dejavu Sans Mono");
-#endif
+    mFontName = stringValue("font_name", defaultMonoFont());
     mOnlyShowMono = boolValue("only_show_mono",true);
     mFontSize = intValue("font_size",14);
     mUseIntelStyle = boolValue("use_intel_style",false);
@@ -4082,12 +4629,13 @@ void Settings::Debugger::doLoad()
 #ifdef Q_OS_WIN
     mUseGDBServer = boolValue("use_gdb_server", false);
 #else
-    mUseGDBServer = boolValue("use_gdb_server", true);
+    mUseGDBServer = true;
 #endif
     mGDBServerPort = intValue("gdb_server_port",41234);
     mMemoryViewRows = intValue("memory_view_rows",16);
     mMemoryViewColumns = intValue("memory_view_columns",16);
-    mArrayElements = intValue("array_elements",300);
+    mArrayElements = intValue("array_elements",100);
+    mCharacters = intValue("string_characters",300);
 }
 
 Settings::CodeCompletion::CodeCompletion(Settings *settings):_Base(settings, SETTING_CODE_COMPLETION)
@@ -4105,32 +4653,32 @@ void Settings::CodeCompletion::setShowCodeIns(bool newShowCodeIns)
     mShowCodeIns = newShowCodeIns;
 }
 
-bool Settings::CodeCompletion::clearWhenEditorHidden()
-{
-    if (!mShareParser) {
-#ifdef Q_OS_WIN
-        MEMORYSTATUSEX statex;
-        statex.dwLength = sizeof (statex);
-        GlobalMemoryStatusEx (&statex);
+//bool Settings::CodeCompletion::clearWhenEditorHidden()
+//{
+//    if (!mShareParser) {
+//#ifdef Q_OS_WIN
+//        MEMORYSTATUSEX statex;
+//        statex.dwLength = sizeof (statex);
+//        GlobalMemoryStatusEx (&statex);
 
-        if (statex.ullAvailPhys < (long long int)2*1024*1024*1024) {
-            return true;
-        }
-#elif defined(Q_OS_LINUX)
-        struct sysinfo si;
-        sysinfo(&si);
-        if (si.freeram < (long long int)2*1024*1024*1024) {
-            return true;
-        }
-#endif
-    }
-    return mClearWhenEditorHidden;
-}
+//        if (statex.ullAvailPhys < (long long int)2*1024*1024*1024) {
+//            return true;
+//        }
+//#elif defined(Q_OS_LINUX)
+//        struct sysinfo si;
+//        sysinfo(&si);
+//        if (si.freeram < (long long int)2*1024*1024*1024) {
+//            return true;
+//        }
+//#endif
+//    }
+//    return mClearWhenEditorHidden;
+//}
 
-void Settings::CodeCompletion::setClearWhenEditorHidden(bool newClearWhenEditorHidden)
-{
-    mClearWhenEditorHidden = newClearWhenEditorHidden;
-}
+//void Settings::CodeCompletion::setClearWhenEditorHidden(bool newClearWhenEditorHidden)
+//{
+//    mClearWhenEditorHidden = newClearWhenEditorHidden;
+//}
 
 int Settings::CodeCompletion::minCharRequired() const
 {
@@ -4262,30 +4810,30 @@ void Settings::CodeCompletion::setEnabled(bool newEnabled)
     mEnabled = newEnabled;
 }
 
-int Settings::CodeCompletion::height() const
+int Settings::CodeCompletion::heightInLines() const
 {
-    return mHeight;
+    return mHeightInLines;
 }
 
-void Settings::CodeCompletion::setHeight(int newHeight)
+void Settings::CodeCompletion::setHeightInLines(int newHeight)
 {
-    mHeight = newHeight;
+    mHeightInLines = newHeight;
 }
 
-int Settings::CodeCompletion::width() const
+int Settings::CodeCompletion::widthInColumns() const
 {
-    return mWidth;
+    return mWidthInColumns;
 }
 
-void Settings::CodeCompletion::setWidth(int newWidth)
+void Settings::CodeCompletion::setWidthInColumns(int newWidth)
 {
-    mWidth = newWidth;
+    mWidthInColumns = newWidth;
 }
 
 void Settings::CodeCompletion::doSave()
 {
-    saveValue("width",mWidth);
-    saveValue("height",mHeight);
+    saveValue("widthInColumns",mWidthInColumns);
+    saveValue("heightInLines",mHeightInLines);
     saveValue("enabled",mEnabled);
     saveValue("parse_local_headers",mParseLocalHeaders);
     saveValue("parse_global_headers",mParseGlobalHeaders);
@@ -4296,7 +4844,7 @@ void Settings::CodeCompletion::doSave()
     saveValue("ignore_case",mIgnoreCase);
     saveValue("append_func",mAppendFunc);
     saveValue("show_code_ins",mShowCodeIns);
-    saveValue("clear_when_editor_hidden",mClearWhenEditorHidden);
+    //saveValue("clear_when_editor_hidden",mClearWhenEditorHidden);
     saveValue("min_char_required",mMinCharRequired);
     saveValue("hide_symbols_start_with_two_underline", mHideSymbolsStartsWithTwoUnderLine);
     saveValue("hide_symbols_start_with_underline", mHideSymbolsStartsWithUnderLine);
@@ -4306,9 +4854,9 @@ void Settings::CodeCompletion::doSave()
 
 void Settings::CodeCompletion::doLoad()
 {
-    //Appearence
-    mWidth = intValue("width",700);
-    mHeight = intValue("height",400);
+    //Appearance
+    mWidthInColumns = intValue("widthInColumns",30);
+    mHeightInLines = intValue("heightInLines",8);
     mEnabled = boolValue("enabled",true);
     mParseLocalHeaders = boolValue("parse_local_headers",true);
     mParseGlobalHeaders = boolValue("parse_global_headers",true);
@@ -4321,10 +4869,10 @@ void Settings::CodeCompletion::doLoad()
     mShowCodeIns = boolValue("show_code_ins",true);
     mMinCharRequired = intValue("min_char_required",1);
     mHideSymbolsStartsWithTwoUnderLine = boolValue("hide_symbols_start_with_two_underline", true);
-    mHideSymbolsStartsWithUnderLine = boolValue("hide_symbols_start_with_underline", false);
+    mHideSymbolsStartsWithUnderLine = boolValue("hide_symbols_start_with_underline", true);
 
     bool shouldShare= true;
-    bool doClear = false;
+//    bool doClear = false;
 
 //#ifdef Q_OS_WIN
 //    MEMORYSTATUSEX statex;
@@ -4351,7 +4899,7 @@ void Settings::CodeCompletion::doLoad()
 //        shouldShare = false;
 //    }
 //#endif
-    mClearWhenEditorHidden = boolValue("clear_when_editor_hidden",doClear);
+    //mClearWhenEditorHidden = boolValue("clear_when_editor_hidden",doClear);
     mShareParser = boolValue("share_parser",shouldShare);
 }
 
@@ -4464,7 +5012,7 @@ QStringList Settings::CodeFormatter::getArguments()
         result.append(QString("--max-continuation-indent=%1").arg(mMaxContinuationIndent));
     if (mBreakBlocks)
         result.append("--break-blocks");
-    if (mBreakBlocksAll)
+    else if (mBreakBlocksAll)
         result.append("--break-blocks=all");
     if (mPadOper)
         result.append("--pad-oper");
@@ -4484,10 +5032,12 @@ QStringList Settings::CodeFormatter::getArguments()
         result.append("--unpad-paren");
     if (mDeleteEmptyLines)
         result.append("--delete-empty-lines");
-    if (mDeleteMultipleEmptyLines)
-        result.append("--delete-multiple-empty-lines");
     if (mFillEmptyLines)
         result.append("--fill-empty-lines");
+    if (mSqueezeLines)
+        result.append(QString("--squeeze-lines=%1").arg(mSqueezeLinesNumber));
+    if (mSqueezeWhitespace)
+        result.append(QString("--squeeze-ws").arg(mSqueezeLinesNumber));
     switch(mAlignPointerStyle) {
     case FormatterOperatorAlign::foaNone:
         break;
@@ -4550,7 +5100,6 @@ QStringList Settings::CodeFormatter::getArguments()
         if (mBreakAfterLogical)
             result.append("--break-after-logical");
     }
-
     return result;
 }
 
@@ -4854,16 +5403,6 @@ void Settings::CodeFormatter::setDeleteEmptyLines(bool newDeleteEmptyLines)
     mDeleteEmptyLines = newDeleteEmptyLines;
 }
 
-bool Settings::CodeFormatter::deleteMultipleEmptyLines() const
-{
-    return mDeleteMultipleEmptyLines;
-}
-
-void Settings::CodeFormatter::setDeleteMultipleEmptyLines(bool newDeleteMultipleEmptyLines)
-{
-    mDeleteMultipleEmptyLines = newDeleteMultipleEmptyLines;
-}
-
 bool Settings::CodeFormatter::fillEmptyLines() const
 {
     return mFillEmptyLines;
@@ -5084,6 +5623,36 @@ void Settings::CodeFormatter::setIndentAfterParens(bool newIndentAfterParens)
     mIndentAfterParens = newIndentAfterParens;
 }
 
+bool Settings::CodeFormatter::squeezeWhitespace() const
+{
+    return mSqueezeWhitespace;
+}
+
+void Settings::CodeFormatter::setSqueezeWhitespace(bool newSqueezeWhitespace)
+{
+    mSqueezeWhitespace = newSqueezeWhitespace;
+}
+
+int Settings::CodeFormatter::squeezeLinesNumber() const
+{
+    return mSqueezeLinesNumber;
+}
+
+void Settings::CodeFormatter::setSqueezeLinesNumber(int newSqueezeLinesNumber)
+{
+    mSqueezeLinesNumber = newSqueezeLinesNumber;
+}
+
+bool Settings::CodeFormatter::squeezeLines() const
+{
+    return mSqueezeLines;
+}
+
+void Settings::CodeFormatter::setSqueezeLines(bool newSqueezeLines)
+{
+    mSqueezeLines = newSqueezeLines;
+}
+
 bool Settings::CodeFormatter::indentSwitches() const
 {
     return mIndentSwitches;
@@ -5129,8 +5698,11 @@ void Settings::CodeFormatter::doSave()
     saveValue("pad_header",mPadHeader);
     saveValue("unpad_paren",mUnpadParen);
     saveValue("delete_empty_lines",mDeleteEmptyLines);
-    saveValue("delete_multiple_empty_lines",mDeleteMultipleEmptyLines);
     saveValue("fill_empty_lines",mFillEmptyLines);
+    saveValue("squeeze_lines", mSqueezeLines);
+    saveValue("squeeze_line_number", mSqueezeLinesNumber);
+    saveValue("squeeze_whitespace", mSqueezeWhitespace);
+
     saveValue("align_pointer_style",mAlignPointerStyle);
     saveValue("align_reference_style",mAlignReferenceStyle);
     saveValue("break_closing_braces",mBreakClosingBraces);
@@ -5163,7 +5735,7 @@ void Settings::CodeFormatter::doLoad()
     mAttachInlines = boolValue("attach_inlines",false);
     mAttachExternC = boolValue("attach_extern_c",false);
     mAttachClosingWhile = boolValue("attach_closing_while",false);
-    mIndentClasses = boolValue("indent_classes",true);
+    mIndentClasses = boolValue("indent_classes",false);
     mIndentModifiers = boolValue("indent_modifiers",false);
     mIndentSwitches = boolValue("indent_switches",true);
     mIndentCases = boolValue("indent_cases",false);
@@ -5188,8 +5760,11 @@ void Settings::CodeFormatter::doLoad()
     mPadHeader = boolValue("pad_header",true);
     mUnpadParen = boolValue("unpad_paren",false);
     mDeleteEmptyLines = boolValue("delete_empty_lines",false);
-    mDeleteMultipleEmptyLines = boolValue("delete_multiple_empty_lines",false);
     mFillEmptyLines = boolValue("fill_empty_lines",false);
+
+    mSqueezeLines = boolValue("squeeze_lines", false);
+    mSqueezeLinesNumber = intValue("squeeze_line_number", 1);
+    mSqueezeWhitespace = boolValue("squeeze_whitespace", false);
     mAlignPointerStyle = intValue("align_pointer_style", FormatterOperatorAlign::foaNone);
     mAlignReferenceStyle = intValue("align_reference_style", FormatterOperatorAlign::foaNone);
     mBreakClosingBraces = boolValue("break_closing_braces",false);
@@ -5865,21 +6440,26 @@ void Settings::UI::doLoad()
     mProblemOrder = intValue("problem_order",6);
 
     //dialogs
-    mCPUDialogWidth = intValue("cpu_dialog_width",977*qApp->desktop()->width()/1920);
-    mCPUDialogHeight = intValue("cpu_dialog_height",622*qApp->desktop()->height()/1080);
-    mCPUDialogSplitterPos = intValue("cpu_dialog_splitter",500*qApp->desktop()->width()/1920);
-    mSettingsDialogWidth = intValue("settings_dialog_width",977*qApp->desktop()->width()/1920);
-    mSettingsDialogHeight = intValue("settings_dialog_height",622*qApp->desktop()->height()/1080);
-    mSettingsDialogSplitterPos = intValue("settings_dialog_splitter",300*qApp->desktop()->width()/1920);
+    QRect geometry = qApp->primaryScreen()->geometry();
+    int width = geometry.width();
+    int height = geometry.height();
 
-    mNewProjectDialogWidth = intValue("new_project_dialog_width", 900*qApp->desktop()->width()/1920);
-    mNewProjectDialogHeight = intValue("new_project_dialog_height", 600*qApp->desktop()->height()/1080);
-    mNewClassDialogWidth = intValue("new_class_dialog_width", 642*qApp->desktop()->width()/1920);
-    mNewClassDialogHeight = intValue("new_class_dialog_height", 300*qApp->desktop()->height()/1080);
-    mNewHeaderDialogWidth = intValue("new_header_dialog_width", 642*qApp->desktop()->width()/1920);
-    mNewHeaderDialogHeight = intValue("new_header_dialog_height", 300*qApp->desktop()->height()/1080);
+    mCPUDialogWidth = intValue("cpu_dialog_width", 977 * width / 1920);
+    mCPUDialogHeight = intValue("cpu_dialog_height", 622 * height / 1080);
+    mCPUDialogSplitterPos = intValue("cpu_dialog_splitter", 500 * width / 1920);
+    mSettingsDialogWidth = intValue("settings_dialog_width", 977 * width / 1920);
+    mSettingsDialogHeight = intValue("settings_dialog_height", 622 * height / 1080);
+    mSettingsDialogSplitterPos = intValue("settings_dialog_splitter", 300 * width / 1920);
+
+    mNewProjectDialogWidth = intValue("new_project_dialog_width", 900 * width / 1920);
+    mNewProjectDialogHeight = intValue("new_project_dialog_height", 600 * height / 1080);
+    mNewClassDialogWidth = intValue("new_class_dialog_width", 642 * width / 1920);
+    mNewClassDialogHeight = intValue("new_class_dialog_height", 300 * height / 1080);
+    mNewHeaderDialogWidth = intValue("new_header_dialog_width", 642 * width / 1920);
+    mNewHeaderDialogHeight = intValue("new_header_dialog_height", 300 * height / 1080);
 }
 
+#ifdef ENABLE_VCS
 Settings::VCS::VCS(Settings *settings):_Base(settings,SETTING_VCS),
     mGitOk(false)
 {
@@ -5955,6 +6535,7 @@ void Settings::VCS::detectGitInPath()
 
     }
 }
+#endif
 
 Settings::Languages::Languages(Settings *settings):
     _Base(settings,SETTING_LANGUAGES)
@@ -6006,7 +6587,7 @@ void Settings::Languages::doSave()
 void Settings::Languages::doLoad()
 {
     mNoDebugDirectivesWhenGenerateASM = boolValue("no_debug_directives_when_generate_asm",true);
-    mNoSEHDirectivesWhenGenerateASM = boolValue("no_seh_directives_when_generate_asm",false);
+    mNoSEHDirectivesWhenGenerateASM = boolValue("no_seh_directives_when_generate_asm",true);
     mX86DialectOfASMGenerated = (X86ASMDialect)intValue("x86_dialect_of_asm_generated",(int)X86ASMDialect::ATT);
 
 

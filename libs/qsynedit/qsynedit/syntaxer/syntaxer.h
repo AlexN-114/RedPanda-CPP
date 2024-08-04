@@ -23,7 +23,7 @@
 #include <QMap>
 #include <QSet>
 #include <QVector>
-#include <QVector>
+#include <QVariant>
 #include "../types.h"
 
 namespace QSynedit {
@@ -54,15 +54,11 @@ struct SyntaxState {
     int parenthesisLevel; // current parenthesis embedding level (needed by rainbow color)
 //    int leftBraces; // unpairing left braces in the current line ( needed by block folding)
 //    int rightBraces; // unparing right braces in the current line (needed by block folding)
-    QVector<IndentInfo> indents;
+    QVector<IndentInfo> indents; // indents stack (needed by auto indent)
     IndentInfo lastUnindent;
-//    QVector<int> indents; // indents stack (needed by auto indent)
-//    int firstIndentThisLine; /* index of first indent that appended to the indents
-//                              *  stack at this line ( need by auto indent) */
-//    QVector<int> matchingIndents; /* the indent matched ( and removed )
-//                              but not started at this line
-//                                (need by auto indent) */
     bool hasTrailingSpaces;
+    QMap<QString,QVariant> extraData;
+
     bool operator==(const SyntaxState& s2);
     IndentInfo getLastIndent();
     IndentType getLastIndentType();
@@ -97,18 +93,22 @@ public:
     TokenAttribute(const TokenAttribute&)=delete;
     TokenAttribute& operator=(const TokenAttribute&)=delete;
 
-    QString name() const;
+    QString name() const { return mName; }
 
-    FontStyles styles() const;
-    void setStyles(const FontStyles &styles);
+    FontStyles styles() const { return mStyles; }
+    void setStyles(const FontStyles &styles) {
+        if (mStyles!=styles) {
+            mStyles = styles;
+        }
+    }
 
-    const QColor &foreground() const;
-    void setForeground(const QColor &color);
+    const QColor &foreground() const { return mForeground; }
+    void setForeground(const QColor &color) { mForeground = color; }
 
-    const QColor &background() const;
-    void setBackground(const QColor &background);
+    const QColor &background() const { return mBackground; }
+    void setBackground(const QColor &background) { mBackground = background; }
 
-    TokenType tokenType() const;
+    TokenType tokenType() const { return mTokenType; }
 
 private:
     QColor mForeground;
@@ -118,7 +118,7 @@ private:
     TokenType mTokenType;
 };
 
-typedef std::shared_ptr<TokenAttribute> PTokenAttribute;
+using PTokenAttribute = std::shared_ptr<TokenAttribute> ;
 
 class Syntaxer {
 public:
@@ -126,27 +126,28 @@ public:
     Syntaxer(const Syntaxer&)=delete;
     Syntaxer& operator=(const Syntaxer&)=delete;
 
-    const QMap<QString, PTokenAttribute>& attributes() const;
+    QMap<QString, PTokenAttribute> attributes() const { return mAttributes; }
 
-    const QSet<QChar>& wordBreakChars() const;
+    const QSet<QChar>& wordBreakChars() const { return mWordBreakChars; }
 
-    const PTokenAttribute& identifierAttribute() const;
+    const PTokenAttribute& identifierAttribute() const { return mIdentifierAttribute; }
 
-    const PTokenAttribute& keywordAttribute() const;
+    const PTokenAttribute& keywordAttribute() const { return mKeywordAttribute; }
 
-    const PTokenAttribute& commentAttribute() const;
+    const PTokenAttribute& commentAttribute() const { return mCommentAttribute; }
 
-    const PTokenAttribute& stringAttribute() const;
+    const PTokenAttribute& stringAttribute() const { return mStringAttribute; }
 
-    const PTokenAttribute& whitespaceAttribute() const;
+    const PTokenAttribute& whitespaceAttribute() const { return mWhitespaceAttribute; }
 
-    const PTokenAttribute& symbolAttribute() const;
+    const PTokenAttribute& symbolAttribute() const { return mSymbolAttribute; }
 
     virtual bool isIdentChar(const QChar& ch) const;
+    virtual bool isIdentStartChar(const QChar& ch) const;
 
-    virtual bool getTokenFinished() const = 0;
-    virtual bool isLastLineCommentNotFinished(int state) const = 0;
-    virtual bool isLastLineStringNotFinished(int state) const = 0;
+    virtual bool isCommentNotFinished(int state) const = 0;
+    virtual bool isStringNotFinished(int state) const = 0;
+    virtual bool isDocstringNotFinished(int /* state */) const { return false; }
     virtual bool eol() const = 0;
     virtual SyntaxState getState() const = 0;
     virtual QString getToken() const=0;
@@ -169,12 +170,13 @@ public:
     virtual bool supportBraceLevel();
     virtual bool isSpaceChar(const QChar& ch);
     virtual bool isWordBreakChar(const QChar& ch);
-    bool enabled() const;
-    void setEnabled(bool value);
     virtual PTokenAttribute getAttribute(const QString& name) const;
     virtual QString commentSymbol();
     virtual QString blockCommentBeginSymbol();
     virtual QString blockCommentEndSymbol();
+
+    virtual bool supportFolding() = 0;
+    virtual bool needsLineState() = 0;
 
 
 protected:
@@ -185,17 +187,16 @@ protected:
     PTokenAttribute mWhitespaceAttribute;
     PTokenAttribute mSymbolAttribute;
 
-    void addAttribute(PTokenAttribute attribute);
-    void clearAttributes();
-    virtual int attributesCount() const;
+    void addAttribute(PTokenAttribute attribute) { mAttributes[attribute->name()]=attribute; }
+    void clearAttributes() { mAttributes.clear(); }
+    virtual int attributesCount() const { return mAttributes.size(); }
 
 private:
     QMap<QString,PTokenAttribute> mAttributes;
-    bool mEnabled;
     QSet<QChar> mWordBreakChars;
 };
 
 using PSyntaxer = std::shared_ptr<Syntaxer>;
 using SyntaxerList = QVector<PSyntaxer>;
 }
-#endif // SYNHIGHLIGTERBASE_H
+#endif // QSYNEDIT_SYNTAXER_H

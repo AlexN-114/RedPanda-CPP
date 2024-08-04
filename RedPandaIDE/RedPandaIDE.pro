@@ -3,13 +3,25 @@ QT       += core gui printsupport network svg xml widgets
 CONFIG += c++17
 CONFIG += nokey
 
-isEmpty(APP_NAME) {
-    APP_NAME = RedPandaCPP
-}
+win32: CONFIG += lrelease_dosdevice
+else: CONFIG += lrelease
+CONFIG += embed_translations
 
-isEmpty(APP_VERSION) {
-    APP_VERSION = 2.23
-}
+# uncomment the following line to enable vcs (git) support
+# CONFIG += ENABLE_VCS
+
+# uncomment the following line to enable sdcc support
+CONFIG += ENABLE_SDCC
+
+# uncomment the following line to enable Lua-based add-on support
+# CONFIG += ENABLE_LUA_ADDON
+
+APP_NAME = RedPandaCPP
+
+include(../version.inc)
+
+# TEST_VERSION = beta2
+system(git rev-list HEAD --count): TEST_VERSION = $$system(git rev-list HEAD --count)
 
 contains(QMAKE_HOST.arch, x86_64):{
     DEFINES += ARCH_X86_64=1
@@ -23,10 +35,6 @@ contains(QMAKE_HOST.arch, x86_64):{
 }
 
 macos: {
-    # This package needs to be installed via homebrew before we can compile it
-    INCLUDEPATH += \
-        /opt/homebrew/opt/icu4c/include
-
     QT += gui-private
 
     ICON = ../macos/RedPandaIDE.icns
@@ -42,15 +50,34 @@ isEmpty(LIBEXECDIR) {
     LIBEXECDIR = $${PREFIX}/libexec
 }
 
-# windows 7 is the minimum windows version
 win32: {
-DEFINES += _WIN32_WINNT=0x0601
+    DEFINES += _WIN32_WINNT=0x0501
+    LIBS += -ladvapi32  # registry APIs
+    LIBS += -lpsapi  # GetModuleFileNameEx, GetProcessMemoryInfo
+    LIBS += -lshlwapi  # SHDeleteKey
+    LIBS += -luser32  # window message APIs
 }
 
 DEFINES += PREFIX=\\\"$${PREFIX}\\\"
 DEFINES += LIBEXECDIR=\\\"$${LIBEXECDIR}\\\"
 DEFINES += APP_NAME=\\\"$${APP_NAME}\\\"
-DEFINES += REDPANDA_CPP_VERSION=\\\"$${APP_VERSION}\\\"
+
+!isEmpty(APP_VERSION_SUFFIX): {
+    DEFINES += APP_VERSION_SUFFIX=\\\"$${APP_VERSION_SUFFIX}\\\"
+}
+
+isEmpty(TEST_VERSION) {
+    DEFINES += REDPANDA_CPP_VERSION=\\\"$${APP_VERSION}\\\"
+} else {
+    DEFINES += REDPANDA_CPP_VERSION=\\\"$${APP_VERSION}.$${TEST_VERSION}\\\"
+}
+win32 {
+    _WINDOWS_PREFER_OPENCONSOLE = $$(WINDOWS_PREFER_OPENCONSOLE)
+    equals(_WINDOWS_PREFER_OPENCONSOLE, "ON") {
+        DEFINES += WINDOWS_PREFER_OPENCONSOLE
+    }
+}
+
 
 gcc {
     QMAKE_CXXFLAGS_RELEASE += -Werror=return-type
@@ -68,24 +95,18 @@ msvc {
 
 CONFIG(debug_and_release_target) {
     CONFIG(debug, debug|release) {
-        OBJ_OUT_PWD = debug/
+        OBJ_OUT_PWD = debug
     }
     CONFIG(release, debug|release) {
-        OBJ_OUT_PWD = release/
+        OBJ_OUT_PWD = release
     }
 }
 
-INCLUDEPATH += ../libs/qsynedit ../libs/redpanda_qt_utils
+INCLUDEPATH += ../libs/qsynedit ../libs/redpanda_qt_utils ../libs/lua
 
-gcc | clang {
-LIBS += $$OUT_PWD/../libs/qsynedit/$${OBJ_OUT_PWD}libqsynedit.a \
-        $$OUT_PWD/../libs/redpanda_qt_utils/$${OBJ_OUT_PWD}libredpanda_qt_utils.a
-}
-msvc {
-LIBS += $$OUT_PWD/../libs/qsynedit/$${OBJ_OUT_PWD}qsynedit.lib \
-        $$OUT_PWD/../libs/redpanda_qt_utils/$${OBJ_OUT_PWD}redpanda_qt_utils.lib
-LIBS += advapi32.lib user32.lib
-}
+LIBS += -L$$OUT_PWD/../libs/qsynedit/$${OBJ_OUT_PWD} -lqsynedit \
+        -L$$OUT_PWD/../libs/redpanda_qt_utils/$${OBJ_OUT_PWD} -lredpanda_qt_utils \
+        -L$$OUT_PWD/../libs/lua/$${OBJ_OUT_PWD} -llua
 
 SOURCES += \
     autolinkmanager.cpp \
@@ -97,18 +118,23 @@ SOURCES += \
     compiler/projectcompiler.cpp \
     compiler/runner.cpp \
     customfileiconprovider.cpp \
-    gdbmiresultparser.cpp \
     compiler/compiler.cpp \
     compiler/compilermanager.cpp \
     compiler/executablerunner.cpp \
     compiler/filecompiler.cpp \
     compiler/stdincompiler.cpp \
+    debugger/debugger.cpp \
+    debugger/gdbmidebugger.cpp \
+    debugger/gdbmiresultparser.cpp \
+#    debugger/dapprotocol.cpp \
+#    debugger/dapdebugger.cpp \    
     cpprefacter.cpp \
     parser/cppparser.cpp \
     parser/cpppreprocessor.cpp \
     parser/cpptokenizer.cpp \
     parser/parserutils.cpp \
     parser/statementmodel.cpp \
+    problems/competitivecompenionhandler.cpp \
     problems/freeprojectsetformat.cpp \
     problems/ojproblemset.cpp \
     problems/problemcasevalidator.cpp \
@@ -125,9 +151,11 @@ SOURCES += \
     settingsdialog/editortooltipswidget.cpp \
     settingsdialog/environmentfolderswidget.cpp \
     settingsdialog/environmentperformancewidget.cpp \
+    settingsdialog/environmentprogramswidget.cpp \
     settingsdialog/environmentshortcutwidget.cpp \
     settingsdialog/executorproblemsetwidget.cpp \
     settingsdialog/formattergeneralwidget.cpp \
+    settingsdialog/formatterpathwidget.cpp \
     settingsdialog/languageasmgenerationwidget.cpp \
 #    settingsdialog/languagecformatwidget.cpp \
     settingsdialog/projectcompileparamaterswidget.cpp \
@@ -140,25 +168,12 @@ SOURCES += \
     settingsdialog/projectoutputwidget.cpp \
     settingsdialog/projectprecompilewidget.cpp \
     settingsdialog/toolsgeneralwidget.cpp \
-    settingsdialog/toolsgitwidget.cpp \
     shortcutmanager.cpp \
     symbolusagemanager.cpp \
     syntaxermanager.cpp \
     thememanager.cpp \
     todoparser.cpp \
     toolsmanager.cpp \
-    vcs/gitbranchdialog.cpp \
-    vcs/gitfetchdialog.cpp \
-    vcs/gitlogdialog.cpp \
-    vcs/gitmanager.cpp \
-    vcs/gitmergedialog.cpp \
-    vcs/gitpulldialog.cpp \
-    vcs/gitpushdialog.cpp \
-    vcs/gitremotedialog.cpp \
-    vcs/gitrepository.cpp \
-    vcs/gitresetdialog.cpp \
-    vcs/gituserconfigdialog.cpp \
-    vcs/gitutils.cpp \
     visithistorymanager.cpp \
     widgets/aboutdialog.cpp \
     widgets/bookmarkmodel.cpp \
@@ -167,7 +182,6 @@ SOURCES += \
     widgets/codecompletionlistview.cpp \
     widgets/codecompletionpopup.cpp \
     widgets/cpudialog.cpp \
-    debugger.cpp \
     editor.cpp \
     editorlist.cpp \
     iconsmanager.cpp \
@@ -182,20 +196,24 @@ SOURCES += \
     settingsdialog/editorgeneralwidget.cpp \
     settingsdialog/editorsymbolcompletionwidget.cpp \
     settingsdialog/editorsyntaxcheckwidget.cpp \
-    settingsdialog/environmentappearencewidget.cpp \
+    settingsdialog/environmentappearancewidget.cpp \
     settingsdialog/executorgeneralwidget.cpp \
     settingsdialog/settingsdialog.cpp \
     settingsdialog/settingswidget.cpp \
     systemconsts.cpp \
     utils.cpp \
+    utils/escape.cpp \
+    utils/font.cpp \
+    utils/parsearg.cpp \
     widgets/coloredit.cpp \
     widgets/compileargumentswidget.cpp \
-    widgets/consolewidget.cpp \
     widgets/customdisablediconengine.cpp \
     widgets/customfilesystemmodel.cpp \
     widgets/custommakefileinfodialog.cpp \
     widgets/darkfusionstyle.cpp \
+    widgets/editorfontdialog.cpp \
     widgets/editorstabwidget.cpp \
+    widgets/filenameeditdelegate.cpp \
     widgets/filepropertiesdialog.cpp \
     widgets/functiontooltipwidget.cpp \
     widgets/headercompletionpopup.cpp \
@@ -224,6 +242,9 @@ SOURCES += \
 
 HEADERS += \
     SimpleIni.h \
+    addon/api.h \
+    addon/executor.h \
+    addon/runtime.h \
     autolinkmanager.h \
     caretlist.h \
     codesnippetsmanager.h \
@@ -237,14 +258,19 @@ HEADERS += \
     compiler/projectcompiler.h \
     compiler/runner.h \
     compiler/stdincompiler.h \
+    debugger/debugger.h \
+    debugger/gdbmidebugger.h \
+    debugger/gdbmiresultparser.h \
+#    debugger/dapprotocol.h \    
+#    debugger/dapdebugger.h \    
     cpprefacter.h \
     customfileiconprovider.h \
-    gdbmiresultparser.h \
     parser/cppparser.h \
     parser/cpppreprocessor.h \
     parser/cpptokenizer.h \
     parser/parserutils.h \
     parser/statementmodel.h \
+    problems/competitivecompenionhandler.h \
     problems/freeprojectsetformat.h \
     problems/ojproblemset.h \
     problems/problemcasevalidator.h \
@@ -261,9 +287,11 @@ HEADERS += \
     settingsdialog/editortooltipswidget.h \
     settingsdialog/environmentfolderswidget.h \
     settingsdialog/environmentperformancewidget.h \
+    settingsdialog/environmentprogramswidget.h \
     settingsdialog/environmentshortcutwidget.h \
     settingsdialog/executorproblemsetwidget.h \
     settingsdialog/formattergeneralwidget.h \
+    settingsdialog/formatterpathwidget.h \
     settingsdialog/languageasmgenerationwidget.h \
 #    settingsdialog/languagecformatwidget.h \
     settingsdialog/projectcompileparamaterswidget.h \
@@ -276,25 +304,12 @@ HEADERS += \
     settingsdialog/projectoutputwidget.h \
     settingsdialog/projectprecompilewidget.h \
     settingsdialog/toolsgeneralwidget.h \
-    settingsdialog/toolsgitwidget.h \
     shortcutmanager.h \
     symbolusagemanager.h \
     syntaxermanager.h \
     thememanager.h \
     todoparser.h \
     toolsmanager.h \
-    vcs/gitbranchdialog.h \
-    vcs/gitfetchdialog.h \
-    vcs/gitlogdialog.h \
-    vcs/gitmanager.h \
-    vcs/gitmergedialog.h \
-    vcs/gitpulldialog.h \
-    vcs/gitpushdialog.h \
-    vcs/gitremotedialog.h \
-    vcs/gitrepository.h \
-    vcs/gitresetdialog.h \
-    vcs/gituserconfigdialog.h \
-    vcs/gitutils.h \
     visithistorymanager.h \
     widgets/aboutdialog.h \
     widgets/bookmarkmodel.h \
@@ -303,7 +318,6 @@ HEADERS += \
     widgets/codecompletionlistview.h \
     widgets/codecompletionpopup.h \
     widgets/cpudialog.h \
-    debugger.h \
     editor.h \
     editorlist.h \
     iconsmanager.h \
@@ -317,21 +331,25 @@ HEADERS += \
     settingsdialog/editorgeneralwidget.h \
     settingsdialog/editorsymbolcompletionwidget.h \
     settingsdialog/editorsyntaxcheckwidget.h \
-    settingsdialog/environmentappearencewidget.h \
+    settingsdialog/environmentappearancewidget.h \
     settingsdialog/executorgeneralwidget.h \
     settingsdialog/settingsdialog.h \
     settingsdialog/settingswidget.h \
     systemconsts.h \
     utils.h \
+    utils/escape.h \
+    utils/font.h \
+    utils/parsearg.h \
     common.h \
     widgets/coloredit.h \
     widgets/compileargumentswidget.h \
-    widgets/consolewidget.h \
     widgets/customdisablediconengine.h \
     widgets/customfilesystemmodel.h \
     widgets/custommakefileinfodialog.h \
     widgets/darkfusionstyle.h \
+    widgets/editorfontdialog.h \
     widgets/editorstabwidget.h \
+    widgets/filenameeditdelegate.h \
     widgets/filepropertiesdialog.h \
     widgets/functiontooltipwidget.h \
     widgets/headercompletionpopup.h \
@@ -369,9 +387,11 @@ FORMS += \
     settingsdialog/editortooltipswidget.ui \
     settingsdialog/environmentfolderswidget.ui \
     settingsdialog/environmentperformancewidget.ui \
+    settingsdialog/environmentprogramswidget.ui \
     settingsdialog/environmentshortcutwidget.ui \
     settingsdialog/executorproblemsetwidget.ui \
     settingsdialog/formattergeneralwidget.ui \
+    settingsdialog/formatterpathwidget.ui \
     settingsdialog/languageasmgenerationwidget.ui \
 #    settingsdialog/languagecformatwidget.ui \
     settingsdialog/projectcompileparamaterswidget.ui \
@@ -384,16 +404,6 @@ FORMS += \
     settingsdialog/projectoutputwidget.ui \
     settingsdialog/projectprecompilewidget.ui \
     settingsdialog/toolsgeneralwidget.ui \
-    settingsdialog/toolsgitwidget.ui \
-    vcs/gitbranchdialog.ui \
-    vcs/gitfetchdialog.ui \
-    vcs/gitlogdialog.ui \
-    vcs/gitmergedialog.ui \
-    vcs/gitpulldialog.ui \
-    vcs/gitpushdialog.ui \
-    vcs/gitremotedialog.ui \
-    vcs/gitresetdialog.ui \
-    vcs/gituserconfigdialog.ui \
     widgets/aboutdialog.ui \
     widgets/choosethemedialog.ui \
     widgets/cpudialog.ui \
@@ -406,10 +416,11 @@ FORMS += \
     settingsdialog/editorgeneralwidget.ui \
     settingsdialog/editorsymbolcompletionwidget.ui \
     settingsdialog/editorsyntaxcheckwidget.ui \
-    settingsdialog/environmentappearencewidget.ui \
+    settingsdialog/environmentappearancewidget.ui \
     settingsdialog/executorgeneralwidget.ui \
     settingsdialog/settingsdialog.ui \
     widgets/custommakefileinfodialog.ui \
+    widgets/editorfontdialog.ui \
     widgets/filepropertiesdialog.ui \
     widgets/infomessagebox.ui \
     widgets/newclassdialog.ui \
@@ -422,6 +433,80 @@ FORMS += \
     widgets/searchdialog.ui \
     widgets/searchinfiledialog.ui \
     widgets/signalmessagedialog.ui
+
+ENABLE_SDCC {
+    DEFINES += ENABLE_SDCC
+
+    SOURCES += \
+        compiler/sdccfilecompiler.cpp \
+        compiler/sdccprojectcompiler.cpp
+
+    HEADERS += \
+        compiler/sdccfilecompiler.h \
+        compiler/sdccprojectcompiler.h
+
+}
+
+ENABLE_LUA_ADDON {
+    DEFINES += ENABLE_LUA_ADDON
+
+    SOURCES += \
+        addon/api.cpp \
+        addon/executor.cpp \
+        addon/runtime.cpp
+
+    HEADERS += \
+        addon/api.h \
+        addon/executor.h \
+        addon/runtime.h
+}
+
+ENABLE_VCS {
+
+    DEFINES += ENABLE_VCS
+    SOURCES += \
+        vcs/gitbranchdialog.cpp \
+        vcs/gitfetchdialog.cpp \
+        vcs/gitlogdialog.cpp \
+        vcs/gitmanager.cpp \
+        vcs/gitmergedialog.cpp \
+        vcs/gitpulldialog.cpp \
+        vcs/gitpushdialog.cpp \
+        vcs/gitremotedialog.cpp \
+        vcs/gitrepository.cpp \
+        vcs/gitresetdialog.cpp \
+        vcs/gituserconfigdialog.cpp \
+        vcs/gitutils.cpp \
+        settingsdialog/toolsgitwidget.cpp
+
+    HEADERS += \
+        vcs/gitbranchdialog.h \
+        vcs/gitfetchdialog.h \
+        vcs/gitlogdialog.h \
+        vcs/gitmanager.h \
+        vcs/gitmergedialog.h \
+        vcs/gitpulldialog.h \
+        vcs/gitpushdialog.h \
+        vcs/gitremotedialog.h \
+        vcs/gitrepository.h \
+        vcs/gitresetdialog.h \
+        vcs/gituserconfigdialog.h \
+        vcs/gitutils.h \
+        settingsdialog/toolsgitwidget.h
+
+
+    FORMS += \
+        vcs/gitbranchdialog.ui \
+        vcs/gitfetchdialog.ui \
+        vcs/gitlogdialog.ui \
+        vcs/gitmergedialog.ui \
+        vcs/gitpulldialog.ui \
+        vcs/gitpushdialog.ui \
+        vcs/gitremotedialog.ui \
+        vcs/gitresetdialog.ui \
+        vcs/gituserconfigdialog.ui \
+        settingsdialog/toolsgitwidget.ui
+}
 
 win32: {
     FORMS +=  \
@@ -437,23 +522,9 @@ win32: {
     settingsdialog/projectversioninfowidget.cpp
 }
 
-unix: {
-    HEADERS += \
-    settingsdialog/formatterpathwidget.h \
-    settingsdialog/environmentprogramswidget.h
-
-    SOURCES += \
-    settingsdialog/formatterpathwidget.cpp \
-    settingsdialog/environmentprogramswidget.cpp
-
-    FORMS += \
-    settingsdialog/formatterpathwidget.ui \
-    settingsdialog/environmentprogramswidget.ui
-}
-
 linux: {
-    LIBS+= \
-    -lrt
+    # legacy glibc compatibility -- modern Unices have all components in `libc.so`
+    LIBS += -lrt -ldl
 
     _LINUX_STATIC_IME_PLUGIN = $$(LINUX_STATIC_IME_PLUGIN)
     equals(_LINUX_STATIC_IME_PLUGIN, "ON") {
@@ -472,13 +543,6 @@ TRANSLATIONS += \
     translations/RedPandaIDE_zh_TW.ts \
     translations/RedPandaIDE_pt_BR.ts
 
-EXTRA_TRANSLATIONS += \
-    ../libs/redpanda_qt_utils/qt_utils_zh_CN.ts \
-    ../libs/qsynedit/qsynedit_zh_CN.ts
-
-
-#CONFIG += lrelease embed_translations
-
 win32: {
     !isEmpty(PREFIX) {
         target.path = $${PREFIX}
@@ -491,6 +555,7 @@ else: unix:!android: target.path = $${PREFIX}/bin
 !isEmpty(target.path): INSTALLS += target
 
 RESOURCES += \
+    fonts.qrc \
     codes.qrc \
     defaultconfigs.qrc \
     icons.qrc \
@@ -499,55 +564,22 @@ RESOURCES += \
 
 RC_ICONS = images/devcpp.ico images/associations/c.ico images/associations/cpp.ico images/associations/dev.ico images/associations/c.ico images/associations/cpp.ico images/associations/h.ico images/associations/hpp.ico
 
-# fixed lrelease.prf
-qtPrepareTool(QMAKE_LRELEASE, lrelease)
-
-isEmpty(LRELEASE_DIR): LRELEASE_DIR = .qm
-isEmpty(QM_FILES_RESOURCE_PREFIX): QM_FILES_RESOURCE_PREFIX = i18n
-
-lrelease.name = lrelease
-lrelease.input = TRANSLATIONS EXTRA_TRANSLATIONS
-lrelease.output = $$LRELEASE_DIR/${QMAKE_FILE_IN_BASE}.qm
-lrelease.commands = $$QMAKE_LRELEASE ${QMAKE_FILE_IN} $$QMAKE_LRELEASE_FLAGS -qm ${QMAKE_FILE_OUT}
-silent: lrelease.commands = @echo lrelease ${QMAKE_FILE_IN} && $$lrelease.commands
-lrelease.CONFIG = no_link target_predeps
-QMAKE_EXTRA_COMPILERS += lrelease
-
-all_translations = $$TRANSLATIONS $$EXTRA_TRANSLATIONS
-for (translation, all_translations) {
-    # mirrors $$LRELEASE_DIR/${QMAKE_FILE_IN_BASE}.qm above
-    translation = $$basename(translation)
-    QM_FILES += $$OUT_PWD/$$LRELEASE_DIR/$$replace(translation, \\..*$, .qm)
-}
-
-qmake_qm_files.files = $$QM_FILES
-qmake_qm_files.base = $$OUT_PWD/$$LRELEASE_DIR
-qmake_qm_files.prefix = $$QM_FILES_RESOURCE_PREFIX
-
 iconsets_files.files += $$files(resources/iconsets/*.svg, true)
 iconsets_files.files += $$files(resources/iconsets/*.json, true)
 
-theme_files.files += $$files(themes/*.json, false)
-theme_files.files += $$files(themes/*.png, false)
+theme_files.files += $$files(resources/themes/*.lua, false)
+theme_files.files += $$files(resources/themes/*.json, false)
+theme_files.files += $$files(resources/themes/*.png, false)
 
-windows: {
-    theme_files.files -= themes/system.json
-}
+colorscheme_files.files += $$files(resources/colorschemes/*.scheme, false)
 
-colorscheme_files.files += $$files(colorschemes/*.scheme, false)
-colorscheme_files.prefix = /colorschemes
-
-RESOURCES += qmake_qm_files
 RESOURCES += iconsets_files
 RESOURCES += theme_files
 RESOURCES += colorscheme_files
 
 macos: {
     # Add needed executables into the main app bundle
-    bundled_executable.files = \
-        $$OUT_PWD/../tools/astyle/astyle \
-        $$OUT_PWD/../tools/consolepauser/consolepauser \
-        $$OUT_PWD/../tools/redpanda-git-askpass/redpanda-git-askpass.app/Contents/MacOS/redpanda-git-askpass
+    bundled_executable.files = $$OUT_PWD/../tools/consolepauser/consolepauser
     bundled_executable.path = Contents/MacOS
 
     # Also bundled templates

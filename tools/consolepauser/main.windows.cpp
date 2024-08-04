@@ -23,19 +23,39 @@ using std::string;
 #include <psapi.h>
 #include <processthreadsapi.h>
 #include <conio.h>
+#include <stdbool.h>
+#include <versionhelpers.h>
 
 #ifndef WINBOOL
 #define WINBOOL BOOL
 #endif
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+#ifndef ENABLE_PROCESSED_OUTPUT
+#define ENABLE_PROCESSED_OUTPUT 0x0001
+#endif
 #define MAX_COMMAND_LENGTH 32768
 #define MAX_ERROR_LENGTH 2048
 
+#define EXIT_WRONG_ARGUMENTS           -1
+#define EXIT_COMMAND_TOO_LONG          -2
+#define EXIT_CREATE_JOB_OBJ_FAILED     -3
+#define EXIT_SET_JOB_OBJ_INFO_FAILED   -4
+#define EXIT_CREATE_PROCESS_FAILED     -5
+#define EXIT_ASSGIN_PROCESS_JOB_FAILED -6
+
+
 enum RunProgramFlag {
     RPF_PAUSE_CONSOLE =     0x0001,
-    RPF_REDIRECT_INPUT =    0x0002
+    RPF_REDIRECT_INPUT =    0x0002,
+    RPF_ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 };
 
 HANDLE hJob;
+bool enableJobControl = IsWindowsXPOrGreater();
+
+bool pauseBeforeExit = false;
 
 LONGLONG GetClockTick() {
     LARGE_INTEGER dummy;
@@ -57,46 +77,44 @@ string GetErrorMessage() {
         NULL,GetLastError(),MAKELANGID(LANG_NEUTRAL,SUBLANG_DEFAULT),&result[0],result.size(),NULL);
 
     // Clear newlines at end of string
-    for(int i = result.length()-1;i >= 0;i--) {
-        if(isspace(result[i])) {
-            result[i] = 0;
-        } else {
-            break;
-        }
-    }
+    while (!result.empty() && (result.back() == 0 || isspace(result.back())))
+        result.pop_back();
     return result;
 }
 
 void PauseExit(int exitcode, bool reInp) {
-    HANDLE hInp=NULL;
-    if (reInp) {
-        SECURITY_ATTRIBUTES sa;
-        sa.nLength = sizeof(sa);
-        sa.lpSecurityDescriptor = NULL;
-        sa.bInheritHandle = TRUE;
+    if (pauseBeforeExit) {
+        HANDLE hInp=NULL;
+        if (reInp) {
+            SECURITY_ATTRIBUTES sa;
+            sa.nLength = sizeof(sa);
+            sa.lpSecurityDescriptor = NULL;
+            sa.bInheritHandle = TRUE;
 
-        HANDLE hInp = CreateFileA("CONIN$", GENERIC_WRITE | GENERIC_READ,
-            FILE_SHARE_READ , &sa, OPEN_EXISTING, /*FILE_ATTRIBUTE_NORMAL*/0, NULL);
-            //si.hStdInput = hInp;
-        SetStdHandle(STD_INPUT_HANDLE,hInp);
-        freopen("CONIN$","r",stdin);
-    }
-    FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
-    fflush(stdin);
-    printf("\n");
-    printf("Press ANY key to exit...");
-    getch();
-    if (reInp) {
-        CloseHandle(hInp);
+            HANDLE hInp = CreateFileA("CONIN$", GENERIC_WRITE | GENERIC_READ,
+                FILE_SHARE_READ , &sa, OPEN_EXISTING, /*FILE_ATTRIBUTE_NORMAL*/0, NULL);
+                //si.hStdInput = hInp;
+            SetStdHandle(STD_INPUT_HANDLE,hInp);
+            freopen("CONIN$","r",stdin);
+        }
+        FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
+        fflush(stdin);
+        printf("\n");
+        printf("Press ANY key to exit...");
+        getch();
+        if (reInp) {
+            CloseHandle(hInp);
+        }
     }
     exit(exitcode);
 }
 
-string GetCommand(int argc,char** argv,bool &reInp,bool &pauseAfterExit) {
+string GetCommand(int argc,char** argv,bool &reInp, bool &enableVisualTerminalSeq) {
     string result;
     int flags = atoi(argv[1]);
     reInp = flags & RPF_REDIRECT_INPUT;
-    pauseAfterExit = flags & RPF_PAUSE_CONSOLE;
+    pauseBeforeExit = flags & RPF_PAUSE_CONSOLE;
+    enableVisualTerminalSeq = flags & RPF_ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     for(int i = 3;i < argc;i++) {
         // Quote the argument in case the path name contains spaces
         result += string("\"") + string(argv[i]) + string("\"");
@@ -110,7 +128,7 @@ string GetCommand(int argc,char** argv,bool &reInp,bool &pauseAfterExit) {
     if(result.length() > MAX_COMMAND_LENGTH) {
         printf("\n--------------------------------");
         printf("\nError: Length of command line string is over %d characters\n",MAX_COMMAND_LENGTH);
-        PauseExit(EXIT_FAILURE,reInp);
+        PauseExit(EXIT_COMMAND_TOO_LONG,reInp);
     }
 
     return result;
@@ -131,12 +149,14 @@ DWORD ExecuteCommand(string& command,bool reInp, LONGLONG &peakMemory, LONGLONG 
         printf("\n--------------------------------");
         printf("\nFailed to execute \"%s\":",command.c_str());
         printf("\nError %lu: %s\n",GetLastError(),GetErrorMessage().c_str());
-        PauseExit(EXIT_FAILURE,reInp);
+        PauseExit(EXIT_CREATE_PROCESS_FAILED,reInp);
     }
-    WINBOOL bSuccess = AssignProcessToJobObject( hJob, pi.hProcess );
-    if ( bSuccess == FALSE ) {
-        printf( "AssignProcessToJobObject failed: error %u\n", GetLastError() );
-        return 0;
+    if (enableJobControl) {
+        WINBOOL bSuccess = AssignProcessToJobObject( hJob, pi.hProcess );
+        if ( bSuccess == FALSE ) {
+            printf( "AssignProcessToJobObject failed: error %lu\n", GetLastError() );
+            PauseExit(EXIT_ASSGIN_PROCESS_JOB_FAILED,reInp);
+        }
     }
 
     WaitForSingleObject(pi.hProcess, INFINITE); // Wait for it to finish
@@ -146,7 +166,7 @@ DWORD ExecuteCommand(string& command,bool reInp, LONGLONG &peakMemory, LONGLONG 
     counter.cb = sizeof(counter);
     if (GetProcessMemoryInfo(pi.hProcess,&counter,
                                  sizeof(counter))){
-            peakMemory = counter.PeakWorkingSetSize/1024;
+        peakMemory = counter.PeakPagefileUsage/1024;
     }
     FILETIME creationTime;
     FILETIME exitTime;
@@ -163,6 +183,17 @@ DWORD ExecuteCommand(string& command,bool reInp, LONGLONG &peakMemory, LONGLONG 
     return result;
 }
 
+void EnableVtSequence() {
+    DWORD mode;
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (GetConsoleMode(hConsole, &mode))
+        SetConsoleMode(hConsole, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT);
+
+    hConsole = GetStdHandle(STD_ERROR_HANDLE);
+    if (GetConsoleMode(hConsole, &mode))
+        SetConsoleMode(hConsole, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT);
+}
+
 int main(int argc, char** argv) {
 
     const char *sharedMemoryId;
@@ -171,7 +202,7 @@ int main(int argc, char** argv) {
         printf("\n--------------------------------");
         printf("\nUsage: consolepauser.exe <0|1> <shared_memory_id> <filename> <parameters>\n");
         printf("\n 1 means the STDIN is redirected by Red Panda C++; 0 means not\n");
-        PauseExit(EXIT_SUCCESS,false);
+        PauseExit(EXIT_WRONG_ARGUMENTS,false);
     }
 
     // Make us look like the paused program
@@ -184,26 +215,29 @@ int main(int argc, char** argv) {
     sa.lpSecurityDescriptor = NULL;
     sa.bInheritHandle = FALSE;
 
-    hJob= CreateJobObject( &sa, NULL );
-
-    if ( hJob == NULL ) {
-        printf( "CreateJobObject failed: error %d\n", GetLastError() );
-        return 0;
-    }
-
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
-    memset(&info,0,sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    WINBOOL bSuccess = SetInformationJobObject( hJob, JobObjectExtendedLimitInformation, &info, sizeof( info ) );
-    if ( bSuccess == FALSE ) {
-        printf( "SetInformationJobObject failed: error %d\n", GetLastError() );
-        return 0;
-    }
-
     bool reInp;
-    bool pauseAfterExit;
+    bool enableVisualTerminalSeq;
     // Then build the to-run application command
-    string command = GetCommand(argc,argv,reInp, pauseAfterExit);
+    string command = GetCommand(argc, argv, reInp, enableVisualTerminalSeq);
+
+    if (enableJobControl) {
+        hJob= CreateJobObject( &sa, NULL );
+
+        if ( hJob == NULL ) {
+            printf( "CreateJobObject failed: error %lu\n", GetLastError() );
+            PauseExit(EXIT_CREATE_JOB_OBJ_FAILED,reInp);
+        }
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
+        memset(&info,0,sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        WINBOOL bSuccess = SetInformationJobObject( hJob, JobObjectExtendedLimitInformation, &info, sizeof( info ) );
+        if ( bSuccess == FALSE ) {
+            printf( "SetInformationJobObject failed: error %lu\n", GetLastError() );
+            PauseExit(EXIT_SET_JOB_OBJ_INFO_FAILED,reInp);
+        }
+    }
+
     HANDLE hOutput = NULL;
     if (reInp) {
         SECURITY_ATTRIBUTES sa;
@@ -219,6 +253,9 @@ int main(int argc, char** argv) {
         freopen("CONOUT$","w+",stderr);
     } else {
         FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
+    }
+    if (enableVisualTerminalSeq) {
+        EnableVtSequence();
     }
 
     HANDLE hSharedMemory=INVALID_HANDLE_VALUE;
@@ -236,8 +273,8 @@ int main(int argc, char** argv) {
             0,
             0,
             BUF_SIZE);
-    } else {
-        printf("can't open shared memory!");
+//    } else {
+//        printf("can't open shared memory!\n");
     }
 
     // Save starting timestamp
@@ -263,9 +300,8 @@ int main(int argc, char** argv) {
 
     // Done? Print return value of executed program
     printf("\n--------------------------------");
-    printf("\nProcess exited after %.4g seconds with return value %lu (%.4g ms cpu time, %d KB mem used).\n",seconds,returnvalue, execSeconds, peakMemory);
-    if (pauseAfterExit)
-        PauseExit(returnvalue,reInp);
+    printf("\nProcess exited after %.4g seconds with return value %lu (%.4g ms cpu time, %lld KB mem used).\n",seconds,returnvalue, execSeconds, peakMemory);
+    PauseExit(returnvalue,reInp);
     return 0;
 }
 

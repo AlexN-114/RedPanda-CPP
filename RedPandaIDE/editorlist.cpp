@@ -68,15 +68,23 @@ QTabWidget*  EditorList::getNewEditorPageControl() const {
 }
 
 QTabWidget* EditorList::getFocusedPageControl() const {
-    //todo:
     switch(mLayout) {
     case LayoutShowType::lstLeft:
         return mLeftPageWidget;
     case LayoutShowType::lstRight:
         return mRightPageWidget;
     case LayoutShowType::lstBoth: {
-        Editor* editor = dynamic_cast<Editor*>(mRightPageWidget->currentWidget());
-        if (editor && editor->hasFocus())
+        Editor* rightEditor = dynamic_cast<Editor*>(mRightPageWidget->currentWidget());
+        if (!rightEditor)
+            return mLeftPageWidget;
+        if (rightEditor->hasFocus())
+            return mRightPageWidget;
+        Editor *leftEditor = dynamic_cast<Editor*>(mLeftPageWidget->currentWidget());
+        if (!leftEditor)
+            return mRightPageWidget;
+        if (leftEditor->hasFocus())
+            return mLeftPageWidget;
+        if (rightEditor->lastFocusOutTime() > leftEditor->lastFocusOutTime())
             return mRightPageWidget;
         return mLeftPageWidget;
     }
@@ -315,24 +323,43 @@ void EditorList::applyColorSchemes(const QString& name)
     }
 }
 
-bool EditorList::isFileOpened(const QString &name)
+bool EditorList::isFileOpened(const QString &fullfilepath) const
 {
-    QFileInfo fileInfo(name);
+    QFileInfo fileInfo(fullfilepath);
     QString filename = fileInfo.absoluteFilePath();
     for (int i=0;i<mLeftPageWidget->count();i++) {
         Editor* e = static_cast<Editor*>(mLeftPageWidget->widget(i));
-        if (e->filename().compare(filename)==0 || e->filename().compare(name)==0)
+        if (e->filename().compare(filename)==0 || e->filename().compare(fullfilepath)==0)
             return true;
     }
     for (int i=0;i<mRightPageWidget->count();i++) {
         Editor* e = static_cast<Editor*>(mRightPageWidget->widget(i));
-        if (e->filename().compare(filename)==0 || e->filename().compare(name)==0)
+        if (e->filename().compare(filename)==0 || e->filename().compare(fullfilepath)==0)
             return true;
     }
     return false;
 }
 
-int EditorList::pageCount()
+bool EditorList::hasFilename(const QString &filename) const
+{
+    for (int i=0;i<mLeftPageWidget->count();i++) {
+        Editor* e = static_cast<Editor*>(mLeftPageWidget->widget(i));
+        QFileInfo fileInfo(e->filename());
+        QString name = fileInfo.fileName();
+        if (name.compare(filename, PATH_SENSITIVITY)==0 )
+            return true;
+    }
+    for (int i=0;i<mRightPageWidget->count();i++) {
+        Editor* e = static_cast<Editor*>(mRightPageWidget->widget(i));
+        QFileInfo fileInfo(e->filename());
+        QString name = fileInfo.fileName();
+        if (name.compare(filename, PATH_SENSITIVITY)==0 )
+            return true;
+    }
+    return false;
+}
+
+int EditorList::pageCount() const
 {
     return mLeftPageWidget->count()+mRightPageWidget->count();
 }
@@ -416,7 +443,7 @@ void EditorList::forceCloseEditor(Editor *editor)
     emit editorClosed();
 }
 
-Editor* EditorList::getOpenedEditorByFilename(QString filename)
+Editor* EditorList::getOpenedEditorByFilename(QString filename) const
 {
     if (filename.isEmpty())
         return nullptr;
@@ -439,7 +466,7 @@ Editor* EditorList::getOpenedEditorByFilename(QString filename)
     return nullptr;
 }
 
-bool EditorList::getContentFromOpenedEditor(const QString &filename, QStringList &buffer)
+bool EditorList::getContentFromOpenedEditor(const QString &filename, QStringList &buffer) const
 {
     if (pMainWindow->isQuitting())
         return false;
@@ -450,7 +477,7 @@ bool EditorList::getContentFromOpenedEditor(const QString &filename, QStringList
     return true;
 }
 
-void EditorList::getVisibleEditors(Editor *&left, Editor *&right)
+void EditorList::getVisibleEditors(Editor *&left, Editor *&right) const
 {
     switch(mLayout) {
     case LayoutShowType::lstLeft:

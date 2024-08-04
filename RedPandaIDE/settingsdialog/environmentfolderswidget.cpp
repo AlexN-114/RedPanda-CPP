@@ -45,11 +45,7 @@ void EnvironmentFoldersWidget::doLoad()
     if (pSettings->environment().useCustomIconSet()) {
         ui->txtIconSetFolder->setText(pSettings->dirs().config(Settings::Dirs::DataType::IconSet));
     }
-    ui->txtThemeFolder->setEnabled(pSettings->environment().useCustomTheme());
-    ui->btnOpenThemeFolderInFileBrowser->setEnabled(pSettings->environment().useCustomTheme());
-    if (pSettings->environment().useCustomTheme()) {
-        ui->txtThemeFolder->setText(pSettings->dirs().config(Settings::Dirs::DataType::Theme));
-    }
+    ui->txtThemeFolder->setText(pSettings->dirs().config(Settings::Dirs::DataType::Theme));
 }
 
 void EnvironmentFoldersWidget::doSave()
@@ -100,9 +96,12 @@ void EnvironmentFoldersWidget::on_btnOpenIconSetFolderInFileBrowser_clicked()
 
 void EnvironmentFoldersWidget::on_btnOpenThemeFolderInFileBrowser_clicked()
 {
+    QString folderName = pSettings->dirs().config(Settings::Dirs::DataType::Theme);
+    QDir folder=QDir{folderName};
+    if (!folder.exists())
+        folder.mkpath(folderName);
     QDesktopServices::openUrl(
                 QUrl("file:///"+
-                     includeTrailingPathDelimiter(pSettings->dirs().config(Settings::Dirs::DataType::Theme)),QUrl::TolerantMode));
-
+                     includeTrailingPathDelimiter(folderName),QUrl::TolerantMode));
 }
 

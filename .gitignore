@@ -1,7 +1,9 @@
 /.vs
+/.vscode
+/assets
 /dist
 /packages/appimage/*/*.AppImage
-/packages/archlinux/*
-!/packages/archlinux/PKGBUILD
+.xmake/
+build/
 *.bak
 *.pro.user

@@ -39,7 +39,6 @@ void StatementModel::add(const PStatement& statement)
 #ifdef QT_DEBUG
     mAllStatements.append(statement);
 #endif
-
 }
 
 void StatementModel::deleteStatement(const PStatement& statement)
@@ -59,29 +58,6 @@ void StatementModel::deleteStatement(const PStatement& statement)
     mAllStatements.removeOne(statement);
 #endif
 
-}
-
-const StatementMap &StatementModel::childrenStatements(const PStatement& statement) const
-{
-    if (!statement) {
-        return mGlobalStatements;
-    } else {
-        return statement->children;
-    }
-}
-
-const StatementMap &StatementModel::childrenStatements(std::weak_ptr<Statement> statement) const
-{
-    PStatement s = statement.lock();
-    return childrenStatements(s);
-}
-
-void StatementModel::clear() {
-    mCount=0;
-    mGlobalStatements.clear();
-#ifdef QT_DEBUG
-    mAllStatements.clear();
-#endif
 }
 
 #ifdef QT_DEBUG
@@ -108,12 +84,7 @@ void StatementModel::dumpAll(const QString &logFile)
              .arg(statement->fileName)
              .arg(statement->line)
              .arg(statement->definitionFileName)
-             .arg(statement->definitionLine)<<
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                 Qt::endl;
-#else
-                 endl;
-#endif
+             .arg(statement->definitionLine)<<Qt::endl;
         }
     }
 }
@@ -154,27 +125,12 @@ void StatementModel::dumpStatementMap(StatementMap &map, QTextStream &out, int l
          .arg(statement->line)
          .arg(statement->definitionFileName)
          .arg(statement->definitionLine);
-        out
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
+        out<<Qt::endl;
         if (statement->children.isEmpty())
             continue;
-        out<<indent<<statement->command<<" {"
-     #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                      <<Qt::endl;
-     #else
-                      <<endl;
-     #endif
+        out<<indent<<statement->command<<" {"<<Qt::endl;
         dumpStatementMap(statement->children,out,level+1);
-        out<<indent<<"}"
-     #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                      <<Qt::endl;
-     #else
-                      <<endl;
-     #endif
+        out<<indent<<"}"<<Qt::endl;
 
     }
 }

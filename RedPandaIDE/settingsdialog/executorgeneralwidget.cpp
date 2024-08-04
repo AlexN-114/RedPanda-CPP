@@ -19,14 +19,25 @@
 #include "../settings.h"
 #include "../iconsmanager.h"
 #include "../systemconsts.h"
+#include "utils.h"
+#include "utils/font.h"
+#include "utils/parsearg.h"
 
 #include <QFileDialog>
+#include <QJsonDocument>
+#include <QJsonArray>
 
 ExecutorGeneralWidget::ExecutorGeneralWidget(const QString& name, const QString& group, QWidget *parent):
     SettingsWidget(name,group,parent),
     ui(new Ui::ExecutorGeneralWidget)
 {
     ui->setupUi(this);
+    ui->txtParsedArgsInJson->setFont(defaultMonoFont());
+#ifdef Q_OS_WIN
+    ui->chkVTSeq->setVisible(true);
+#else
+    ui->chkVTSeq->setVisible(false);
+#endif
 }
 
 ExecutorGeneralWidget::~ExecutorGeneralWidget()
@@ -37,6 +48,9 @@ ExecutorGeneralWidget::~ExecutorGeneralWidget()
 void ExecutorGeneralWidget::doLoad()
 {
     ui->chkPauseConsole->setChecked(pSettings->executor().pauseConsole());
+#ifdef Q_OS_WIN
+    ui->chkVTSeq->setChecked(pSettings->executor().enableVirualTerminalSequence());
+#endif
     ui->chkMinimizeOnRun->setChecked(pSettings->executor().minimizeOnRun());
     ui->grpExecuteParameters->setChecked(pSettings->executor().useParams());
     ui->txtExecuteParamaters->setText(pSettings->executor().params());
@@ -47,6 +61,9 @@ void ExecutorGeneralWidget::doLoad()
 void ExecutorGeneralWidget::doSave()
 {
     pSettings->executor().setPauseConsole(ui->chkPauseConsole->isChecked());
+#ifdef Q_OS_WIN
+    pSettings->executor().setEnableVirualTerminalSequence(ui->chkVTSeq->isChecked());
+#endif
     pSettings->executor().setMinimizeOnRun(ui->chkMinimizeOnRun->isChecked());
     pSettings->executor().setUseParams(ui->grpExecuteParameters->isChecked());
     pSettings->executor().setParams(ui->txtExecuteParamaters->text());
@@ -73,3 +90,10 @@ void ExecutorGeneralWidget::updateIcons(const QSize &/*size*/)
     pIconsManager->setIcon(ui->btnBrowse,IconsManager::ACTION_FILE_OPEN_FOLDER);
 }
 
+
+void ExecutorGeneralWidget::on_txtExecuteParamaters_textChanged(const QString &commandLine)
+{
+    QStringList parsed = parseArgumentsWithoutVariables(commandLine);
+    QJsonArray obj = QJsonArray::fromStringList(parsed);
+    ui->txtParsedArgsInJson->setText(QJsonDocument{obj}.toJson());
+}

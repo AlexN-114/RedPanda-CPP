@@ -1,3 +1,316 @@
+Red Panda C++ Version 3.2
+
+  - Change: The way to calcuate astyle path.
+  - fix: Scroll bar arrow size not correct in the dark themes.
+  - fix: Don't auto scroll to the caret after undo/redo.
+
+Red Panda C++ Version 3.1
+
+  - fix: Can't correctly select in column mode.
+  - fix: Can't correctly parse template parameters that contains "->", like "std::queue<std::function<auto()->void>>";
+  - fix: Shouldn't warn "xxx.s is modifed" when "Generate assembly" is rerun.
+  - fix: Shouldn't warn "Makefile is modifed" when "View Makefile" is rerun.
+  - fix: In compiler options page, Can't save default stack size to 0MB.
+  - enhancement: Support national flag emojis.
+  - fix: Visibility for the interrupt action is not correctly updated.
+  - enhancement: Handle problems info from competitive-companion in background thread.
+  - enhancement: Handle time/memory limits in problems info from competitive-companion in background thread.
+  - enhancement: When problems info from competitive-companion received, show tips in the status bar.  
+  - fix: Layout for function tips.
+  - enhancement: More elements in the demo of editor color theme optiont page.
+  - fix: Mingw32-make doesn't work correctly if there are bash in the path.
+  - fix: All color scheme names are incorrectly displayed as bold, if the current one is a customed one.
+  - fix: Variables defined by using alias can't show completion info.
+  - enhancement: Support operator() overload.
+  - change: rename all "ansi" encoding to "system default".
+
+Red Panda C++ Version 3.0
+
+  - enhancement: New chinese translation for invalid filename messagebox. (by XY0797@github.com)
+  - enhancement: Limit the minimum font size in options dialog to 5. (by XY0797@github.com)
+  - enhancement: After a new file is created in filesystem panel, auto select and rename it. (by XY0797@github.com)
+  - enhancement: Select file basename when rename in the filesystem panel. (by XY0797@github.com)
+  - change: Don't use "Microsoft Yahei" as the default non-ascii font in non-chinese environment.
+  - enhancement: Support unicode characters > 0xFFFF
+  - enhancement: Support unicode ZWJ and ZWNJ.
+  - enhancement: Support unicode combining characters.
+  - enhancement: Don't force fixed-width when using non fixed-width fonts.
+  - change: Replace non-ascii font with fallback font.
+  - enhancement: Display ascii control chars.
+  - fix: Parser: invalidating file may lost class inheritance infos.
+  - fix: Function argument infos are not correctly parsed.
+  - enhancement: Migrate external calls from command string to argv array to improve safety and security.
+  - enhancement: Support POSIX shell-like escaping in user inputs for compiler arguments.
+  - fix: (Hopefully) properly escape filenames and arguments in makefile generation.
+  - enhancement: Beautify display for spaces and linebreaks.
+  - fix: Insert line after comments may auto add an extra '*'.
+  - fix: Can't show function tips for std::ios::sync_with_stdio.
+  - fix: Wrong indent for the line after the pasted context.
+  - Enhancement: When '{' is inputted and there are contents selected, auto add line breaks and indents.
+  - fix: Selected lines doesn't draw line break glyphs.
+  - fix: issue #215 (Caret may be drawn in the gutter.)
+  - change: Force use utf8 as the exec encoding for fmtlib in the auto link options page.
+  - fix: After spaces in comments and strings, symbol completion for '{' and '(' are wrong.
+  - fix: Issue #230 Crash when input " in the txt files.
+  - enhancement: Unique look&feel for the underline shown while ctrl+mouse over #include line.
+  - enhancement: Better look&feel for the wave underline shown for syntax errors.
+  - fix: "float" in #include "float.h" is wrong syntax colored.
+  - enhancement: Unify syntax color for #include header name
+  - enhancement: Issue #229 Press Enter/Return in the tree view in files panel will open the file.
+  - enhancement: Internal optimization for loading/editing files.
+  - enhancement: Show space glyphs in C/C++ char literals.
+  - enhancement: Optimization for string/raw string/char literal status check while completing symbols in c/c++ files.
+  - enhancement: Windows installer Hi-DPI support.
+  - fix: Delete/Insert in column editing mode.
+  - enhancement: Issue #196 Support C++ using alias in  syntax highlighting/code completion/function tips.
+  - enhancement: Support annonymous class
+  - fix: Using alias for global symbols are not correctly handled.
+  - enhancement: Support "enum struct" Scoped enumerations.
+  - fix: Function tips contains functions that not in the scope.
+  - fix: Hint for bold text (<b></b>) are not correctly handled in the function tips.
+  - enhancement: Improve lldb-mi compatibility.
+  - fix: Failed to evaluate expressions while debugging, if the expression has spaces in it.
+  - fix: When debugging, can't watch expressions that has spaces in it.
+  - enhancement: Font list in the options / editor / font panel( by CyanoHao  ). 
+  - enhancement: Text are vertically center aligned in lines( by CyanoHao  ).
+  - fix: In the debugger console, Auto-wrapped lines  can't be correctly selected.
+  - enhancement: Auto choose a better font for theme choosing dialog in the first run.
+  - fix: Debugger console's background not correctly cleared before redrawn.
+  - enhancement: Make output in the debug console cleaner.
+  - enhancement: Execute the last debug command in the debug console if ENTER pressed.
+  - change: When debugging, don't auto set focus to the editor.
+  - enhancement: Folding button scales with editor font.
+  - fix: Shouldn't show header completion popup in #include line comments.
+  - change: Invert scroll direction in horizontal, like in vertical.
+  - fix: Caret unseen when move to a long line end by press END.
+  - fix: No icons for inherited class private members.
+  - fix: Ctrl+Return insert linebreak shouldn't scroll unnecessarilly.
+  - enhancement: Move caret to line begin would scroll to the begin if possible.
+  - fix: Filename in tables in the debug panel are not correctly eroded.
+  - enhancement: Tooltip info for the stacktrace table in the debug panel.
+  - fix: '*=' is treadted as '*' when parsing. 
+  - fix: Can't correctly retrieve function parameters type.
+  - fix: Auto type induction for expression contains '[]' are not correct.
+  - fix: Option 'Pause after run in console' for tools doesn't work.
+  - fix: Filename that contains '&' doesn't correctly displayed in the editor tab.
+  - enhancement: Type induction for "auto &&" vars.
+  - enhancement: Syntax highlighting for c++ attributes.
+  - enhancement: Show "std::function" in the completion list.
+  - enhancement: Improvement in italic font support.
+  - fix: History not correctly loaded with up/down arrow key in the debug console.
+  - enhancement: Improve lambda expression support.
+  - enhancement: Show type completion hint after "constexpr"/"extern"/"static"/"consteval"/"constinit"/"const"/"volatile"/"inline" etc.
+  - enhancement: Restore line position after file is modified outside and reloaded.
+  - fix: Caret on '('/',' in string/comment shouldn't invoke function info tips.
+  - fix: Function name not correctly found if it and the '(' is not in one line;
+  - fix: Register names in the cpu info are not in correct order.
+  - enhancement: Auto type induction for new / temp class object.
+  - enhancement: Vertically scroll by pixel.
+  - enhancement: Display (gdb) prompt in debug console after it's cleared.
+  - fix: Output of "disas" is not shown in debug console.
+  - fix: Display not correctly updated after select all in debug console.
+  - change: Set focus to "find next" button when find/replace dialog is openned.
+  - change: Don't set focus to "close" button after searched in the find/replace dialog
+  - change: Set focus to "find" button when "find in files..." dialog is openned.
+  - enhancement: Correct tab orders for all setting pages/dialogs.
+  - enhancement: Shortcut key for buttons in find/replace and "find in files" dialogs.  
+  - enhancement: Auto define macro "_DEBUG" for "Debug" compiler set(like visual studio).
+  - enhancement: Suggest macro names after "#ifdef"/"#ifndef"/"#undef".
+  - enhancement: If contents from stderr are logged into "Tools Output" panel, add problem case name info to the log. 
+  - fix: In split screen mode, editor on the right can't be correctly found by commands.
+  - fix: Remove duplicated macro defines make it's lost in the parse result.
+  - fix: An undefined macro is still missing the the parse result after #undef is removed.
+  - fix: If a class method is overloaded, only one of them is inherited by it's children.
+  - enhancement: Adjust function tip pos to prevent it from run outside the right window edge.
+  - enhancement: Open ".def" (Module definition file) file in editor when double click it in the project view.
+  - enhancement: When a dll project has .def file, use it when generating the dll file.  
+  - fix: "project name".exe.manifest is auto removed when build the project.
+  - fix: "0x3.12p+1" is treadted as a plus expression when reformatting code. ( by 绣球135@qq ）
+  - change: Don't turn on the code format option "indent class" by default.
+  - enhancement: Add compiler set by choose the executable.
+  - fix: Compile info for project doesn't have name of the project executable.
+  - enhancement: Highlight words in the string/comments.
+  - fix: If there are only 1 line in the editor, shift+down can't select it.
+  - enhancement: By default, use monospaced font to display register values in the CPU Info dialog.
+  - fix: Negative values in register like AH/AL are wrongs displayed as 32/64-bit number.
+  - Change: Change background color for highlighted buttons in the default theme.
+  - enhancement: Make colors in code suggestion popup consistent with the editor.
+  - enhancement: Make colors in header suggestion popup consistent with the editor.
+  - fix: C++ source after ';' are treated as comments in cpu info window.
+  - enhancement: Support "extern template" in code parser.
+  - enhancement: Set shortcuts for tools menu item.
+  - enhancement: Enhancement for custom tools.
+  - fix: Can't correctly undo/redo "Delete current line".
+  - fix: Breakpoint condition expression that contains spaces doesn't work.
+  - enhancement: Double click on breakpoint table's condition cell to modify it.
+  - fix: Don't show function prototype tip for function name that contains namespace alias.
+  - fix: Can't save changes in project options -> compiler set , after base compiler set was changed.
+  - fix: Project options -> file doesn't work.
+  - fix: Don't show function prototype tip for function name that contains more than one namespace;
+  - fix: Compiler set options "Check for stack smashing attacks (-fstack-protector)" was not correctly applied when compiling.
+  - fix: can't jump to definition/declaration for symbols in using alias statement like "using ::printf".
+  - fix: Don't show completion suggestion for members of variable which type name has namespace alias;
+  - fix: Theme manager not correctly inited in options dialog / environment / appearance.  
+  - enhancement: Size of icons in the completion popup changes with the editor font size.
+  - change: Completion popup size settings are based on editor's char width/line height.
+  - change: Remove "limit for copy" and "limit for undo" options.
+  - fix: Can't find the correct type if current symbol is member of a class that has constructors.
+  - fix: Alias a namespace to itself will create infinite loop.
+  - fix: Can't find symbols indirectly included by other files.
+  - enhancement: Function tip's width changes with editor width.
+  - fix: '<' / '>' not shown in function tips.
+  - enhancement: In debug console, Ctrl+C/Ctrl+X/Ctrl+V conflicts with application action.
+  - enhancement: Auto hide Edit/Selection/Code/Refactor menu if no file openning.
+  - enhancement: Auto hide Project menu if no project openning.
+  - fix: Toggle breakpoint by shortcut may use wrong line.
+  - fix: Size of the icons in problem and problem set panel are not correct.
+  - fix: Shouldn't consider preceeding '&'/'*' when popping completion suggest list for variable members.
+  - fix: Positions of current matching parenthesis not correctly updated.
+  - fix: Can't show correct completion info for vars declared with template parameters ending with ">>".
+  - enhancement: Auto type induction for "std::make_shared"/"std::make_unique".
+  - enhancement: sdcc project compiler: compile source file in subfolders.
+  - fix: project options -> compiler set -> static link & auto convert charset options not correctly loaded.
+  - change: Don't generate project resource files for sdcc project.
+  - fix: Name of the macro for project private resource header is not correct.
+  - fix: In sdcc project, sdcc keywords are not in completion suggest list.
+  - fix: In sdcc project, parser are not correctly inited as sdcc parser.
+  - fix: Temp object + member function call is wrongly parsed as constructor.
+  - enhancement: Improve how to manage themes in Options → general → appearance.
+  - change: Use official astyle program.
+  - enhancement: New code format option: "Remove superfluous empty lines exceeding"
+  - enhancement: New code format option: "Remove superfluous spaces"
+  - change: Remove code format option: "Delete continuous empty lines"
+  - fix: Current editor wouldn't get parsed, when it's switched from another editor being parsed.
+  - enhancement: Support macro in #include preprocessing statements.
+  - fix: In options -> code format -> Program, Choose astyle path button doesn't work.
+  - fix: project not correctly reparsed after rename unit.
+  - enhancement: support C++ 17 structured binding in stl map containers foreach loop.
+  - fix: Crash when has source line like "std::cout << (3+4*4>5*(4+3)-1 && (4-3>5)) <<std::endl;".
+  - fix: The memory usage displayed after program execution is wrong.
+  - enhancement: New compiler option "stack size" in the link subpage.
+  - change: Set "Ctrl+G" as the shortcut for "Goto line..."
+  - change: Set "Ctrl+B" as the shortcut for "Toggle Bookmark"
+  - fix: Fail to evaluate expressions if macro can't be expanded.
+  - enhancement: New menu item "Code completion" in "Code" menu.
+  - fix: Can't compile / run assembly files in gcc 13/14 .
+  - enhancement: Show full filepath in the tooltip of editor tab.
+    
+Red Panda C++ Version 2.26
+
+  - enhancement: Code suggestion for embedded std::vectors.
+  - change: Use ctrl+mouseMove event to highlight jumpable symbols (instead of ctrl+tooltip).
+  - enhancement: Auto adjust position of the suggestion popup window.
+  - enhancement: Windows XP support ( by cyano.CN  )
+  - fix: __attribute__ is not correctly handled if it is after 'static'.
+  - enhancement: Parse files that contains C++ 20 'concept' keyword. (No code suggesion for concepts now)
+  - enhancement: Parse files that contains C++ 20 'requires' keyword.
+  - fix: Code suggestions in namespace.
+  - enhancement: Code suggestions for namespace alias.
+  - fix: Correctly handle statements like 'using xxx::operator()'.
+  - fix: Link in the project options dialog / precompiled header pages is not clickable.
+  - change: Don't change caret position when ctrl+click.
+  - fix: Should cd to working directory when debugging.
+  - change: Ensure the line just below caret is visible while moving caret.
+  - change: Set mouse cursor to hand pointing when it's on gutter.
+  - enhancement: Basic support for parsing variadic macros(macros that use __VA_ARGS__).
+  - enhancement: Better support for expanding macros with complex parameters.
+  - fix: Macros that defined by the compiler are not correctly syntax-colored and tooltiped.
+  - fix: Code suggestion for identifiers after '*' (eg. 3 * item->price) can't correct.
+  - fix: C++ compiler atrribute '[[xxx]]' are not correctly handled.
+  - fix: If the integrated gcc compiler is add to path, auto find compilers will find in twice. (Windows)
+  - enhancement: When induce type info for return value, try to select the overloaded one that doesn't have an "auto" type.
+  - enhancement: Hide symbols that contains "<>" in code suggestions.
+  - enhancement: Slightly reduce memory usage.
+  - change: In Options -> Language -> Generate Assembly, option "Don't generate SEH directives" default to True.
+  - change: In Options —> Editor -> Code Suggestion, option "Hide symbols starting with underscore" default to True.
+  - fix: Crash if include a non-exist header file in the source.
+  - fix: Line numbers for problem case input/output/expected texteditors are not vertically centered.
+  - enhancement: E-ink color scheme.
+  - fix: Use the system default encoding for input when running problem cases.
+  - change: Use qt.conf to use freetype font engine. User can use the windows default font engine by remove this file.
+  - fix: Click on the line begin may toggle breakpoint.
+  - change: Don't auto add; when completing '{' for lines starting with 'struct/union/enum' and ending with ')'
+  - Enhancement: Better support for macros.
+  - Enhancement: Better type induction for auto in foreach loop of maps.
+  - Enhancement: Better contrast for scroller slider in dark theme.
+  - Enhancement: Using lua script in themes.
+  - Enhancement: Add compiler hint add-on interface for packager.
+  - Enhancement: Loose some limit about platform/architecture (such as ASan).
+  - Enhancement: add support for Windows user-wide installation.
+  - Enhancement: add qmake variable to control preference of UTF-8 compatible OpenConsole.exe on Windows.
+  - Enhancement: add Windows arm64 package.
+  - Fix: Force to use debug server when debugging with lldb-mi to fix input/output on Windows.
+  - Fix: Can't goto definition/declaration into files that not saved.
+  - Fix: Expression that starts with full scoped variables might be treated as var definition.
+  - Enhancement: Don't auto-indent in raw string.
+  - Fix: Function list is not correctly retrived for full-scoped functions.
+  - Enhancement: Improved Raw string support
+  - Enhancement: New option for compiler set "Don't localize gcc output messages"
+  - Enhancement: Optimization for drawing scrollbars.
+  - Enhancement: Issue #213 Expands macro when finding function tips.
+
+Red Panda C++ Version 2.25
+
+  - fix: Symbol completion of '(' before selection may fail, if cursor is at the beginning of the selection.
+  - change: Symbol completion of '{' won't insert extra new lines.
+  - fix: "move selection up/down" of whole lines selection are no correctly handled.
+  - enhancement: Improvement of terminal support ( by cyano.CN )
+  - enhancement: ANSI escape sequences Support in windows 10/11 ( by cyano.CN )
+  - enhancement: Option "Enable ANSI escape sequences Support" in Settings -> Executor 
+  - change: Use freetype as the fontengine in windows ( by cyano.CN )
+  - fix: Custom compile options is not used when retrieve macros defined by the compiler.
+  - fix: Processing for #if/#elif/#else is not correct.
+  - Change: Empty project template won't auto create main.c/main.cpp
+  - enhancement: When creating project, warn user if the project folder is not empty.
+  - fix: Press '>' after '-' don't show completion suggestion info.
+  - fix: Icon position not correct under hiDPI devices and zoom factor >= 200%.
+  - enhancement: After compiler settings changed, run/debug current file will auto recompile.
+  - ehhancement: Show selected char counts in status bar.
+  - enhancement: Differentiate /* and /** when calculate auto indents.
+  - fix: crash when using ibus as the input method ( cyano.CN ).
+  - fix: Correctly handle project templates that have wrong unit counts.
+  - fix: Project recompiles for every run if auto increase build number is turned on.
+  - fix: Auto increase build number for project is not correctly processed.
+  
+Red Panda C++ Version 2.24
+
+  - fix: members of elements of stl maps are not correctly suggested.
+  - fix: memory view's cell size is too wide in linux.
+  - fix: Code completion doesn't work if "min id length to show completion" is not 1.
+  - fix: english typos. (thanks for sangiye0@github)
+  - fix: Goto definition/declaration may choose wrong symbol when multiple files are opened and symbols have the same name.
+  - fix: "UTF-8 BOM" can't be correctly loaded as project file's encoding.
+  - fix: Project file's encoding is not correctly updated after converted manually.
+  - enhancement: Press left/right arrow will move caret to the begin/end of the selection.
+  - enhancement: Press up/down arrow will move caret up/down from the begin/end of the selection.
+  - enhancement: Show progress dialog if the time for searching compilers is too long.
+  - fix: Dummy struct/enum symbols shouldn't be shown in the completion suggestion.
+  - enhancement: Support optional enum name.
+  - enhancement: Support optional enum type.
+  - enhancement: Support simple const expression evaluation for enum values.
+  - fix: Accessibilty for inherited members are not correct calculated in multiple inheritance.
+  - fix: Can't parse full class name when handle inheritance.
+  - fix: Can't parse virtual inherit.  
+  - fix: Filename in the gcc 13.1 error messages when building project is using wrong encoding.
+  - change: Git support is disabled in the distributed buildings. 
+  - fix: Wrong code suggestion while inputing numbers in assembly files.
+  - fix: Defines in all files are wrongly cleared when reparsing.
+  - change: New file created by file template is set as unmodified by default.
+  - change: Remove option "clear all symbols when current editor is hidden".
+  - fix: When opening multiple files, only the active file should be parsed.
+  - fix: Wrong compiler settings if xcode is not installed in mac os.
+  - enhancement: Name for new files will not be different from files openned.
+  - fix: Crash if close file while auto syntax checking.
+  - enhancement: Support sdcc compiler.
+  - enhancement: Autowrap tool output text.
+  - fix: Press up/down arrow key in the option dialog's left panel won't switch page.
+  - fix: Can't suggest header filename starting with numbers.
+  - enhancement: Better layout for compiler options page.
+  - enhancement: False branches are displayed as comments.
+  - enhancement: Support SDCC Project.
+  - enhancement: 3 compare mode for problem cases.
+  - fix: Can't find other compilers that in the same folder with gcc.
+
 Red Panda C++ Version 2.23
 
   - fix: When selection is availalbe, Ctrl+Click shouldn't jump to declaration/definition.
@@ -1040,7 +1353,7 @@ Red Panda C++ Version 0.14.0
   - enhancement: show custom icon set folder in options -> enviroment -> folders 
   - enhancement: new class ( to project) wizard
   - enhancement: greatly speed up code completion 
-  - fix: code folding calcuation not correct when some codes are folded and editing after them
+  - fix: code folding calculation not correct when some codes are folded and editing after them
   - enhancement: code completion ui redesigned
   - fix: mainwindow action's short cut doesn't work,  if the action is not in menu or toolbar
   - fix: when run all cases for a problem, processing of output is slow

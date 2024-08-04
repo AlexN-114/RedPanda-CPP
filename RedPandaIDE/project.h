@@ -61,8 +61,8 @@ struct ProjectModelNode {
 
 struct ProjectEditorLayout {
     QString filename;
-    int topLine;
-    int leftChar;
+    int top;
+    int left;
     int caretX;
     int caretY;
     int order;
@@ -212,7 +212,7 @@ public:
 
     ~Project();
     QString directory() const;
-    QString executable() const;
+    QString outputFilename() const;
     QString makeFileName();
     QString xmakeFileName();
     bool unitsModifiedSince(const QDateTime& time);

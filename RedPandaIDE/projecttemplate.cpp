@@ -37,6 +37,7 @@ PTemplateUnit ProjectTemplate::unit(int index)
     if (!mIni || mVersion<=0)
         return PTemplateUnit();
     QString section = QString("Unit%1").arg(index);
+    if (mIni->GetSectionSize(toByteArray(section))<0) return PTemplateUnit();
     PTemplateUnit unit = std::make_shared<TemplateUnit>();
     QString lang = pSettings->environment().language();
     if (!lang.isEmpty()) {
@@ -57,7 +58,7 @@ PTemplateUnit ProjectTemplate::unit(int index)
     if (unit->CppName.isEmpty())
         unit->CppName = unit->CName;
     unit->Target = fromByteArray(mIni->GetValue(toByteArray(section), "Target", ""));
-
+    unit->overwrite = mIni->GetBoolValue(toByteArray(section), "Overwrite", true);
     return unit;
 }
 
@@ -110,39 +111,16 @@ void ProjectTemplate::readTemplateFile(const QString &fileName)
         mName = fromByteArray(mIni->GetValue("Template", "Name", ""));
     if (mDescription.isEmpty())
         mDescription = fromByteArray(mIni->GetValue("Template", "Description", ""));
+    mIconInfo=fromByteArray(mIni->GetValue("Template", "IconInfo", ""));
 
     mOptions.icon = mIni->GetValue("Project", "Icon", "");
     mOptions.type = static_cast<ProjectType>(mIni->GetLongValue("Project", "Type", 0)); // default = gui
-    mOptions.includeDirs = fromByteArray(mIni->GetValue("Project", "Includes", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-          Qt::SkipEmptyParts
-#else
-          QString::SkipEmptyParts
-#endif
-      );
-    mOptions.binDirs = fromByteArray(mIni->GetValue("Project", "Bins", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-          Qt::SkipEmptyParts
-#else
-          QString::SkipEmptyParts
-#endif
-      );
+    mOptions.includeDirs = fromByteArray(mIni->GetValue("Project", "Includes", "")).split(";", Qt::SkipEmptyParts);
+    mOptions.binDirs = fromByteArray(mIni->GetValue("Project", "Bins", "")).split(";", Qt::SkipEmptyParts);
 
-    mOptions.libDirs = fromByteArray(mIni->GetValue("Project", "Libs", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-          Qt::SkipEmptyParts
-#else
-          QString::SkipEmptyParts
-#endif
-      );
+    mOptions.libDirs = fromByteArray(mIni->GetValue("Project", "Libs", "")).split(";", Qt::SkipEmptyParts);
 
-    mOptions.resourceIncludes = fromByteArray(mIni->GetValue("Project", "ResourceIncludes", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-           Qt::SkipEmptyParts
-#else
-           QString::SkipEmptyParts
-#endif
-       );
+    mOptions.resourceIncludes = fromByteArray(mIni->GetValue("Project", "ResourceIncludes", "")).split(";", Qt::SkipEmptyParts);
     mOptions.compilerCmd = fromByteArray(mIni->GetValue("Project", "Compiler", ""));
     mOptions.cppCompilerCmd = fromByteArray(mIni->GetValue("Project", "CppCompiler", ""));
     mOptions.linkerCmd = fromByteArray(mIni->GetValue("Project", "Linker",""));
@@ -150,9 +128,9 @@ void ProjectTemplate::readTemplateFile(const QString &fileName)
     mOptions.isCpp = mIni->GetBoolValue("Project", "IsCpp", false);
     mOptions.includeVersionInfo = mIni->GetBoolValue("Project", "IncludeVersionInfo", false);
     mOptions.supportXPThemes = mIni->GetBoolValue("Project", "SupportXPThemes", false);
-    mOptions.exeOutput = fromByteArray(mIni->GetValue("Project", "ExeOutput", ""));
-    mOptions.objectOutput = fromByteArray(mIni->GetValue("Project", "ObjectOutput", ""));
-    mOptions.logOutput = fromByteArray(mIni->GetValue("Project", "LogOutput", ""));
+    mOptions.folderForOutput = fromByteArray(mIni->GetValue("Project", "ExeOutput", ""));
+    mOptions.folderForObjFiles = fromByteArray(mIni->GetValue("Project", "ObjectOutput", ""));
+    mOptions.logFilename = fromByteArray(mIni->GetValue("Project", "LogOutput", ""));
     mOptions.execEncoding = mIni->GetValue("Project","ExecEncoding", ENCODING_SYSTEM_DEFAULT);
 
     mOptions.staticLink  = mIni->GetBoolValue("Project", "StaticLink",true);
@@ -251,5 +229,15 @@ int ProjectTemplate::version() const
 void ProjectTemplate::setVersion(int newVersion)
 {
     mVersion = newVersion;
+}
+
+QString ProjectTemplate::iconInfo() const
+{
+    return mIconInfo;
+}
+
+void ProjectTemplate::setIconInfo(const QString &newIconInfo)
+{
+    mIconInfo = newIconInfo;
 }
 

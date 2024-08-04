@@ -34,16 +34,27 @@ public:
     const QList<PToolItem> &tools() const;
     void setTools(const QList<PToolItem> &newTools);
     void addTool(PToolItem item);
-    PToolItem getTool(int index);
-    void removeTool(int index);
+    PToolItem getTool(int row);
+    void updateTool(int row, PToolItem item);
+    void removeTool(int row);
 
 private:
     QList<PToolItem> mTools;
+    int mMoveTargetRow;
 
     // QAbstractItemModel interface
 public:
     int rowCount(const QModelIndex &parent) const override;
     QVariant data(const QModelIndex &index, int role) const override;
+
+    // QAbstractItemModel interface
+public:
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    Qt::DropActions supportedDropActions() const override;
+    bool dropMimeData(const QMimeData *data, Qt::DropAction action, int row, int column, const QModelIndex &parent) override;
+    bool insertRows(int row, int count, const QModelIndex &parent) override;
+    bool removeRows(int row, int count, const QModelIndex &parent) override;
+
 };
 
 
@@ -51,19 +62,16 @@ class ToolsGeneralWidget : public SettingsWidget
 {
     Q_OBJECT
 public:
-    enum class EditType {
-        Edit,
-        None
-    };
     explicit ToolsGeneralWidget(const QString& name, const QString& group, QWidget *parent = nullptr);
     ~ToolsGeneralWidget();
 private:
-    void finishEditing(bool askSave, const QModelIndex& itemIndex=QModelIndex());
-    void prepareEdit(const PToolItem& PToolItem);
+    void finishEditing(bool askSave);
+    void cleanEditor();
+    void prepareEdit(int row);
     void showEditPanel(bool isShow);
 private slots:
     void onEdited();
-    void onToolsCurrentChanged(const QModelIndex &current, const QModelIndex &previous);
+    void editTool(const QModelIndex &index);
     void updateDemo();
     void on_btnAdd_clicked();
 
@@ -78,12 +86,14 @@ private slots:
     void on_btnBrowseWorkingDirectory_clicked();
 
     void on_btnBrowseProgram_clicked();
+    void on_btnEdit_clicked();
+
 private:
     Ui::ToolsGeneralWidget *ui;
     MacroInfoModel mMacroInfoModel;
     ToolsModel mToolsModel;
-    EditType mEditType;
     bool mEdited;
+    int mCurrentEditingRow;
 
     // SettingsWidget interface
 protected:

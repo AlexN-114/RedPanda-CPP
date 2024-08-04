@@ -84,7 +84,8 @@ public:
         DoubleQuote,
         DoubleQuoteEscape,
         RawString,
-        RawStringNoEscape
+        RawStringNoEscape,
+        RawStringEnd
     };
 
     enum class WordPurpose {
@@ -110,8 +111,6 @@ public:
     };
 
     struct SyntaxIssue {
-        int col;
-        int endCol;
         int startChar;
         int endChar;
         CompileIssueType issueType;
@@ -150,6 +149,7 @@ public:
     void saveFile(QString filename);
     bool save(bool force=false, bool reparse=true);
     bool saveAs(const QString& name="", bool fromProject = false);
+    void setFilename(const QString& newName);
     void activate();
 
     QTabWidget* pageControl() noexcept;
@@ -178,6 +178,7 @@ public:
     void toggleBreakpoint(int line);
     void clearBreakpoints();
     bool hasBreakpoint(int line);
+    void toggleBookmark(int line);
     void addBookmark(int line);
     void removeBookmark(int line);
     bool hasBookmark(int line) const;
@@ -185,9 +186,10 @@ public:
     void removeBreakpointFocus();
     void modifyBreakpointProperty(int line);
     void setActiveBreakpointFocus(int Line, bool setFocus=true);
-    QString getPreviousWordAtPositionForSuggestion(const QSynedit::BufferCoord& p);
+    QString getPreviousWordAtPositionForSuggestion(const QSynedit::BufferCoord& p, bool &hasTypeQualifier);
     QString getPreviousWordAtPositionForCompleteFunctionDefinition(const QSynedit::BufferCoord& p);
     void reformat(bool doReparse=true);
+    void replaceContent(const QString &newContent, bool doReparse=true);
     void checkSyntaxInBack();
     void gotoDeclaration(const QSynedit::BufferCoord& pos);
     void gotoDefinition(const QSynedit::BufferCoord& pos);
@@ -201,6 +203,7 @@ public:
     void resetBreakpoints();
     bool notParsed();
     void insertLine();
+    void breakLine();
     void deleteWord();
     void deleteToWordStart();
     void deleteToWordEnd();
@@ -210,6 +213,7 @@ public:
     void deleteToBOL();
     void gotoBlockStart();
     void gotoBlockEnd();
+    void showCodeCompletion();
 
     QStringList getOwnerExpressionAndMemberAtPositionForCompletion(
             const QSynedit::BufferCoord& pos,
@@ -225,6 +229,27 @@ public:
     void tab() override;
 
     static PCppParser sharedParser(ParserLanguage language);
+
+    void pageUp() { processCommand(QSynedit::EditCommand::PageUp); }
+    void pageDown() { processCommand(QSynedit::EditCommand::PageDown); }
+    void gotoLineStart() { processCommand(QSynedit::EditCommand::LineStart); }
+    void gotoLineEnd() { processCommand(QSynedit::EditCommand::LineEnd); }
+    void gotoPageStart() { processCommand(QSynedit::EditCommand::PageTop); }
+    void gotoPageEnd() { processCommand(QSynedit::EditCommand::PageBottom); }
+    void gotoFileStart() { processCommand(QSynedit::EditCommand::FileStart); }
+    void gotoFileEnd() { processCommand(QSynedit::EditCommand::FileEnd); }
+    void toggleReadonly();
+
+    void pageUpAndSelect() { processCommand(QSynedit::EditCommand::SelPageUp); }
+    void pageDownAndSelect() { processCommand(QSynedit::EditCommand::SelPageDown); }
+    void selectToLineStart() { processCommand(QSynedit::EditCommand::SelLineStart); }
+    void selectToLineEnd() { processCommand(QSynedit::EditCommand::SelLineEnd); }
+    void selectToPageStart() { processCommand(QSynedit::EditCommand::SelPageTop); }
+    void selectToPageEnd() { processCommand(QSynedit::EditCommand::SelPageBottom); }
+    void selectToFileStart() { processCommand(QSynedit::EditCommand::SelFileStart); }
+    void selectToFileEnd() { processCommand(QSynedit::EditCommand::SelFileEnd); }
+
+    bool inTab() { return mParentPageControl!=nullptr; }
 
 signals:
     void renamed(const QString& oldName, const QString& newName, bool firstSave);
@@ -262,6 +287,7 @@ private:
 
     bool handleCodeCompletion(QChar key);
     void initParser();
+    ParserLanguage calcParserLanguage();
     void undoSymbolCompletion(int pos);
     QuoteStatus getQuoteStatus();
 
@@ -297,6 +323,11 @@ private:
     void onExportedFormatToken(QSynedit::PSyntaxer syntaxer, int Line, int column, const QString& token,
         QSynedit::PTokenAttribute &attr);
     void onScrollBarValueChanged();
+    void updateHoverLink(int line);
+    void cancelHoverLink();
+
+    QSize calcCompletionPopupSize();
+
 private:
     bool mInited;
     QDateTime mBackupTime;
@@ -325,7 +356,6 @@ private:
     PCppParser mParser;
     std::shared_ptr<CodeCompletionPopup> mCompletionPopup;
     std::shared_ptr<HeaderCompletionPopup> mHeaderCompletionPopup;
-    int mLastIdCharPressed;
     bool mUseCppSyntax;
     QString mCurrentWord;
     QString mCurrentDebugTipWord;
@@ -353,6 +383,7 @@ private:
     int mHoverModifiedLine;
     int mWheelAccumulatedDelta;
     QMap<QString,StatementKind> mIdentCache;
+    qint64 mLastFocusOutTime;
 
     static QHash<ParserLanguage,std::weak_ptr<CppParser>> mSharedParsers;
 
@@ -362,6 +393,8 @@ protected:
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void keyReleaseEvent(QKeyEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
 
     // SynEdit interface
 protected:
@@ -395,7 +428,10 @@ public:
     bool canAutoSave() const;
     void setCanAutoSave(bool newCanAutoSave);
 
+    quint64 lastFocusOutTime() const;
+
 protected:
+    void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void inputMethodEvent(QInputMethodEvent *) override;
     void closeEvent(QCloseEvent *event) override;

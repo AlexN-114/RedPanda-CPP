@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include "qt_utils/utils.h"
+#include "utils.h"
 #include <QApplication>
 #include <QByteArray>
 #include <QDir>
@@ -114,8 +114,8 @@ const QByteArray guessTextEncoding(const QByteArray& text){
 
 
 bool isTextAllAscii(const QByteArray& text) {
-    for (char c:text) {
-        if (c<0 || c>127) {
+    for (QChar c:text) {
+        if (c.unicode()>127) {
             return false;
         }
     }
@@ -197,7 +197,7 @@ QString trimRight(const QString &s)
         return s;
     int i = s.length()-1;
 //   while ((i>=0) && ((s[i] == '\r') || (s[i]=='\n') || (s[i] == '\t') || (s[i]==' ')))  {
-    while ((i>=0) && (s[i]<=32)) {
+    while ((i>=0) && ((s[i] == '\t') || (s[i]==' '))) {
         i--;
     };
     if (i>=0) {
@@ -215,7 +215,7 @@ QString trimLeft(const QString &s)
 //    while ((i<s.length()) && ((s[i] == '\r') || (s[i]=='\n') || (s[i] == '\t') || (s[i]==' ')))  {
 //        i++;
 //    };
-    while ((i<s.length()) && (s[i]<=32))  {
+    while ((i<s.length()) && ((s[i] == '\t') || (s[i]==' ')))  {
         i++;
     };
     if (i<s.length()) {
@@ -400,12 +400,7 @@ bool stringsToFile(const QStringList &list, const QString &fileName)
         return false;
     QTextStream stream(&file);
     for (const QString& s:list) {
-        stream<<s
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-             <<Qt::endl;
-#else
-             <<endl;
-#endif
+        stream<<s<<Qt::endl;
     }
     return true;
 }
@@ -511,10 +506,10 @@ void copyFolder(const QString &fromDir, const QString &toDir)
 
 QString includeTrailingPathDelimiter(const QString &path)
 {
-    if (path.endsWith('/') || path.endsWith(QDir::separator())) {
+    if (path.endsWith(QDir::separator()) || path.endsWith(QDir::separator())) {
         return path;
     } else {
-        return path + "/";
+        return path + QDir::separator();
     }
 }
 
@@ -539,7 +534,7 @@ QString changeFileExt(const QString& filename, QString ext)
         path = includeTrailingPathDelimiter(fileInfo.path());
     }
     if (suffix.isEmpty()) {
-        return path+filename+ext;
+        return path+name+ext;
     } else {
         return path+fileInfo.completeBaseName()+ext;
     }
@@ -609,12 +604,12 @@ int compareFileModifiedTime(const QString &filename1, const QString &filename2)
 }
 
 
-void inflateRect(QRect &rect, int delta)
+void inflateRect(QRectF &rect, float delta)
 {
     inflateRect(rect,delta,delta);
 }
 
-void inflateRect(QRect &rect, int dx, int dy)
+void inflateRect(QRectF &rect, float dx, float dy)
 {
     rect.setLeft(rect.left()-dx);
     rect.setRight(rect.right()+dx);
@@ -724,12 +719,10 @@ QStringList absolutePaths(const QString &dirPath, const QStringList &relativePat
     return list;
 }
 
-
-
 bool isBinaryContent(const QByteArray &text)
 {
     for (char c:text) {
-        if (c>=0 && c<' ' && c!='\t' && c!='\n' && c!='\r') {
+        if (c==0) {
             return true;
         }
     }
@@ -742,4 +735,33 @@ void clearQPlainTextEditFormat(QTextEdit *editor)
     cursor.select(QTextCursor::Document);
     cursor.setCharFormat(QTextCharFormat());
     cursor.clearSelection();
+}
+
+int compareFileModifiedTime(const QString &filename, qint64 timestamp)
+{
+    QFileInfo fileInfo1(filename);
+    qint64 time=fileInfo1.lastModified().toMSecsSinceEpoch();
+    if (time > timestamp)
+        return 1;
+    if (time < timestamp)
+        return -1;
+    return 0;
+}
+
+QString replacePrefix(const QString &oldString, const QString &prefix, const QString &newPrefix)
+{
+    QString result = oldString;
+    if (oldString.startsWith(prefix)) {
+        result = newPrefix+oldString.mid(prefix.length());
+    }
+    return result;
+}
+
+const QChar *getNullTerminatedStringData(const QString &str)
+{
+    const QChar* result = str.constData();
+    if (result[str.size()]!=QChar(0)) {
+        result = str.data();
+    }
+    return result;
 }

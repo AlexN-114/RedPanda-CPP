@@ -34,7 +34,7 @@ public:
         Project,
         StdIn
     };
-    Compiler(const QString& filename, bool silent,bool onlyCheckSyntax);
+    Compiler(const QString& filename, bool onlyCheckSyntax);
     Compiler(const Compiler&)=delete;
     Compiler& operator=(const Compiler&)=delete;
 
@@ -43,6 +43,8 @@ public:
 
     const std::shared_ptr<Project> &project() const;
     void setProject(const std::shared_ptr<Project> &newProject);
+
+    PCppParser parser() const;
 
 signals:
     void compileStarted();
@@ -56,6 +58,7 @@ public slots:
 protected:
     void run() override;
     void processOutput(QString& line);
+    void getParserForFile(const QString& filename);
     virtual QString getFileNameFromOutputLine(QString &line);
     virtual int getLineNumberFromOutputLine(QString &line);
     virtual int getColunmnFromOutputLine(QString &line);
@@ -66,32 +69,32 @@ protected:
     virtual bool prepareForCompile() = 0;
     virtual QByteArray pipedText();
     virtual bool prepareForRebuild() = 0;
-    virtual QString getCharsetArgument(const QByteArray& encoding, FileType fileType, bool onlyCheckSyntax);
-    virtual QString getCCompileArguments(bool checkSyntax);
-    virtual QString getCppCompileArguments(bool checkSyntax);
-    virtual QString getCIncludeArguments();
-    virtual QString getProjectIncludeArguments();
-    virtual QString getCppIncludeArguments();
-    virtual QString getLibraryArguments(FileType fileType);
-    virtual QString parseFileIncludesForAutolink(
+    virtual bool beforeRunExtraCommand(int idx);
+    virtual QStringList getCharsetArgument(const QByteArray& encoding, FileType fileType, bool onlyCheckSyntax);
+    virtual QStringList getCCompileArguments(bool checkSyntax);
+    virtual QStringList getCppCompileArguments(bool checkSyntax);
+    virtual QStringList getCIncludeArguments();
+    virtual QStringList getProjectIncludeArguments();
+    virtual QStringList getCppIncludeArguments();
+    virtual QStringList getLibraryArguments(FileType fileType);
+    virtual QStringList parseFileIncludesForAutolink(
             const QString& filename,
-            QSet<QString>& parsedFiles,
-            PCppParser& parser);
+            QSet<QString>& parsedFiles);
     virtual bool parseForceUTF8ForAutolink(
             const QString& filename,
-            QSet<QString>& parsedFiles,
-            PCppParser& parser);
+            QSet<QString>& parsedFiles);
     void log(const QString& msg);
     void error(const QString& msg);
-    void runCommand(const QString& cmd, const QString& arguments, const QString& workingDir, const QByteArray& inputText=QByteArray());
+    void runCommand(const QString& cmd, const QStringList& arguments, const QString& workingDir, const QByteArray& inputText=QByteArray(), const QString& outputFile=QString());
+    QString escapeCommandForLog(const QString &cmd, const QStringList &arguments);
 
 protected:
-    bool mSilent;
     bool mOnlyCheckSyntax;
     QString mCompiler;
-    QString mArguments;
-    QStringList mExtraCompilersList;
-    QStringList mExtraArgumentsList;
+    QStringList mArguments;
+    QList<QString> mExtraCompilersList;
+    QList<QStringList> mExtraArgumentsList;
+    QList<QString> mExtraOutputFilesList;
     QString mOutputFile;
     int mErrorCount;
     int mWarningCount;
@@ -101,6 +104,8 @@ protected:
     bool mRebuild;
     std::shared_ptr<Project> mProject;
     bool mSetLANG;
+    PCppParser mParserForFile;
+    bool mForceEnglishOutput;
 
 private:
     bool mStop;

@@ -28,6 +28,7 @@ struct TemplateUnit {
   QString CppText;
   QString Source;
   QString Target;
+  bool overwrite;
 };
 
 using PTemplateUnit = std::shared_ptr<TemplateUnit>;
@@ -65,6 +66,9 @@ public:
 
     void setVersion(int newVersion);
 
+    QString iconInfo() const;
+    void setIconInfo(const QString &newIconInfo);
+
 private:
     QString mFileName;
     ProjectOptions mOptions;
@@ -72,6 +76,7 @@ private:
     QString mCategory;
     QString mName;
     QString mIcon; // icon in project form
+    QString mIconInfo;
     PSimpleIni mIni;
     int mVersion;
 };

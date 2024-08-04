@@ -22,10 +22,10 @@
 namespace  QSynedit {
 
 extern const QSet<QChar> WordBreakChars;
-extern const QChar SpaceGlyph;
-extern const QChar TabGlyph;
-extern const QChar LineBreakGlyph;
-extern const QChar SoftBreakGlyph;
+extern const QString SpaceGlyph;
+extern const QString TabGlyph;
+extern const QString LineBreakGlyph;
+extern const QString SoftBreakGlyph;
 
 // names for token attributes
 #define SYNS_AttrAssembler          "Assembler"
@@ -50,6 +50,8 @@ extern const QChar SoftBreakGlyph;
 #define SYNS_AttrSymbol "Symbol"
 #define SYNS_AttrVariable "Variable"
 #define SYNS_AttrSpace "Space"
+#define SYNS_AttrText "Text"
+
 
 // names of exporter output formats
 #define SYNS_ExporterFormatHTML "HTML"
@@ -57,5 +59,6 @@ extern const QChar SoftBreakGlyph;
 #define SYNS_ExporterFormatTeX "TeX"
 
 }
+
 
 #endif // CONSTANTS_H

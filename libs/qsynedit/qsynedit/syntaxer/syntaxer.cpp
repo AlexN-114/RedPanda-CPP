@@ -19,7 +19,6 @@
 
 namespace QSynedit {
 Syntaxer::Syntaxer() :
-    mEnabled(true),
     mWordBreakChars{ WordBreakChars }
 {
     mCommentAttribute = std::make_shared<TokenAttribute>(SYNS_AttrComment,
@@ -40,46 +39,6 @@ Syntaxer::Syntaxer() :
     mSymbolAttribute = std::make_shared<TokenAttribute>(SYNS_AttrSymbol,
                                                                  TokenType::Operator);
     addAttribute(mSymbolAttribute);
-}
-
-const QMap<QString, PTokenAttribute>& Syntaxer::attributes() const
-{
-    return mAttributes;
-}
-
-const QSet<QChar>& Syntaxer::wordBreakChars() const
-{
-    return mWordBreakChars;
-}
-
-const PTokenAttribute& Syntaxer::identifierAttribute() const
-{
-    return mIdentifierAttribute;
-}
-
-const PTokenAttribute &Syntaxer::keywordAttribute() const
-{
-    return mKeywordAttribute;
-}
-
-const PTokenAttribute &Syntaxer::commentAttribute() const
-{
-    return mCommentAttribute;
-}
-
-const PTokenAttribute& Syntaxer::stringAttribute() const
-{
-    return mStringAttribute;
-}
-
-const PTokenAttribute& Syntaxer::whitespaceAttribute() const
-{
-    return mWhitespaceAttribute;
-}
-
-const PTokenAttribute& Syntaxer::symbolAttribute() const
-{
-    return mSymbolAttribute;
 }
 
 bool Syntaxer::isKeyword(const QString &)
@@ -115,7 +74,7 @@ bool Syntaxer::supportBraceLevel()
 
 bool Syntaxer::isSpaceChar(const QChar &ch)
 {
-    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch.isSpace();
 }
 
 bool Syntaxer::isWordBreakChar(const QChar &ch)
@@ -154,34 +113,17 @@ bool Syntaxer::isWordBreakChar(const QChar &ch)
 
 bool Syntaxer::isIdentChar(const QChar &ch) const
 {
-    if (ch == '_') {
-        return true;
-    }
-    if ((ch>='0') && (ch <= '9')) {
-        return true;
-    }
-    if ((ch>='a') && (ch <= 'z')) {
-        return true;
-    }
-    if ((ch>='A') && (ch <= 'Z')) {
-        return true;
-    }
-    return false;
+    return (ch == '_')
+        || ((ch>='0') && (ch <= '9'))
+        || ((ch>='a') && (ch <= 'z'))
+           || ((ch>='A') && (ch <= 'Z'));
 }
 
-void Syntaxer::addAttribute(PTokenAttribute attribute)
+bool Syntaxer::isIdentStartChar(const QChar &ch) const
 {
-    mAttributes[attribute->name()]=attribute;
-}
-
-void Syntaxer::clearAttributes()
-{
-    mAttributes.clear();
-}
-
-int Syntaxer::attributesCount() const
-{
-    return mAttributes.size();
+    return (ch == '_')
+           || ((ch>='a') && (ch <= 'z'))
+           || ((ch>='A') && (ch <= 'Z'));
 }
 
 PTokenAttribute Syntaxer::getAttribute(const QString& name) const
@@ -202,60 +144,6 @@ QString Syntaxer::blockCommentBeginSymbol()
 QString Syntaxer::blockCommentEndSymbol()
 {
     return QString();
-}
-
-bool Syntaxer::enabled() const
-{
-    return mEnabled;
-}
-
-void Syntaxer::setEnabled(bool value)
-{
-    if (value != mEnabled) {
-        mEnabled = value;
-    }
-}
-
-FontStyles TokenAttribute::styles() const
-{
-    return mStyles;
-}
-
-void TokenAttribute::setStyles(const FontStyles &styles)
-{
-    if (mStyles!=styles) {
-        mStyles = styles;
-    }
-}
-
-const QColor& TokenAttribute::foreground() const
-{
-    return mForeground;
-}
-
-void TokenAttribute::setForeground(const QColor &color)
-{
-    mForeground = color;
-}
-
-const QColor &TokenAttribute::background() const
-{
-    return mBackground;
-}
-
-void TokenAttribute::setBackground(const QColor &background)
-{
-    mBackground = background;
-}
-
-TokenType TokenAttribute::tokenType() const
-{
-    return mTokenType;
-}
-
-QString TokenAttribute::name() const
-{
-    return mName;
 }
 
 TokenAttribute::TokenAttribute(const QString &name, TokenType tokenType):
@@ -279,11 +167,10 @@ bool SyntaxState::operator==(const SyntaxState &s2)
             && (braceLevel == s2.braceLevel) // current braces embedding level (needed by rainbow color)
             && (bracketLevel == s2.bracketLevel) // current brackets embedding level (needed by rainbow color)
             && (parenthesisLevel == s2.parenthesisLevel) // current parenthesis embedding level (needed by rainbow color)
-
             && (indents == s2.indents)
             && (lastUnindent == s2.lastUnindent)
+            && (extraData == s2.extraData)
             ;
-
 }
 
 IndentInfo SyntaxState::getLastIndent()

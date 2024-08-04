@@ -21,7 +21,6 @@
 #include <QMainWindow>
 #include <QTimer>
 #include <QFileSystemModel>
-#include <QTcpServer>
 #include <QElapsedTimer>
 #include <QSortFilterProxyModel>
 #include "common.h"
@@ -40,6 +39,7 @@
 #include "widgets/ojproblemsetmodel.h"
 #include "widgets/customfilesystemmodel.h"
 #include "customfileiconprovider.h"
+#include "problems/competitivecompenionhandler.h"
 
 
 QT_BEGIN_NAMESPACE
@@ -131,6 +131,7 @@ public:
     void updateEditorBookmarks();
     void updateEditorBreakpoints();
     void updateEditorActions();
+    void updateEncodingActions(const Editor *e);
     void updateEditorActions(const Editor *e);
     void updateProjectActions();
     void updateCompileActions();
@@ -278,6 +279,7 @@ public slots:
     void onFileSaved(const QString& path, bool inProject);
 
 private:
+    void executeTool(PToolItem item);
     int calIconSize(const QString &fontName, int fontPointSize);
     void hideAllSearchDialogs();
     void prepareSearchDialog();
@@ -301,14 +303,15 @@ private:
     QStringList getDefaultCompilerSetBinDirs();
     void openShell(const QString& folder, const QString& shellCommand, const QStringList& binDirs);
     QAction* createAction(const QString& text,
-                             QWidget* parent,
-                             QKeySequence shortcut=QKeySequence());
-    QAction* createShortcutCustomableAction(
-            const QString& text,
-            const QString& objectName,
+                          QWidget* parent,
+                          QKeySequence shortcut=QKeySequence(),
+                          Qt::ShortcutContext shortcutContext = Qt::WidgetWithChildrenShortcut);
+    QAction* createGlobalAction(
+            const QString &text,
+            const QString &objectName,
+            const QString &groupName,
             QKeySequence shortcut=QKeySequence());
     void scanActiveProject(bool parse=false);
-    void includeOrSkipDirs(const QStringList& dirs, bool skip);
     void showSearchReplacePanel(bool show);
     void clearIssues();
     void doCompileRun(RunType runType);
@@ -330,6 +333,11 @@ private:
     void reparseNonProjectEditors();
     QString switchHeaderSourceTarget(Editor *editor);
 
+    void modifyBreakpointCondition(int index);
+    void initEditorActions();
+    void changeEditorActionParent(QAction *action, const QString& groupName);
+    void backupMenuForEditor(QMenu* menu, QList<QAction *> &backup);
+
 private slots:
     void setupSlotsForProject();
     void onProjectUnitAdded(const QString &filename);
@@ -338,7 +346,9 @@ private slots:
     void onProjectViewNodeRenamed();
     void setDockExplorerToArea(const Qt::DockWidgetArea &area);
     void setDockMessagesToArea(const Qt::DockWidgetArea &area);
+#ifdef ENABLE_VCS
     void updateVCSActions();
+#endif
     void invalidateProjectProxyModel();
     void onEditorRenamed(const QString &oldFilename, const QString &newFilename, bool firstSave);
     void onAutoSaveTimeout();
@@ -364,7 +374,7 @@ private slots:
     void onProblemNameChanged(int index);
     void onProblemRunCurrentCase();
     void onProblemBatchSetCases();
-    void onNewProblemConnection();
+    void onNewProblemReceived(int num, int total, POJProblem newProblem);
     void updateProblemTitle();
     void onEditorClosed();
     void onToolsOutputClear();
@@ -395,6 +405,7 @@ private slots:
     void onDebugConsoleSelectAll();
     void onDebugConsoleCopy();
     void onDebugConsoleClear();
+    void onBreakpointTableDoubleClicked(const QModelIndex& index);
     void onFilesViewOpenInExplorer();
     void onFilesViewOpenInTerminal();
     void onFilesViewOpenWithExternal();
@@ -416,7 +427,7 @@ private slots:
     void onProjectRenameUnit();
     void onBreakpointRemove();
     void onBreakpointViewRemoveAll();
-    void onBreakpointViewProperty();
+    void onModifyBreakpointCondition();
     void onSearchViewClearAll();
     void onSearchViewClear();
     void onTableIssuesClear();
@@ -429,6 +440,7 @@ private slots:
     void on_EditorTabsRight_tabCloseRequested(int index);
 
     void onFileSystemModelLayoutChanged();
+    void onFileRenamedInFileSystemModel(const QString &path, const QString &oldName, const QString &newName);
 
     void on_actionOpen_triggered();
 
@@ -618,10 +630,6 @@ private slots:
 
     void on_actionEGE_Manual_triggered();
 
-    void on_actionAdd_bookmark_triggered();
-
-    void on_actionRemove_Bookmark_triggered();
-
     void on_tableBookmark_doubleClicked(const QModelIndex &index);
 
     void on_actionModify_Bookmark_Description_triggered();
@@ -702,6 +710,7 @@ private slots:
 
     void on_actionNew_Header_triggered();
 
+#ifdef ENABLE_VCS
     void on_actionGit_Create_Repository_triggered();
 
     void on_actionGit_Add_Files_triggered();
@@ -709,8 +718,6 @@ private slots:
     void on_actionGit_Commit_triggered();
 
     void on_actionGit_Restore_triggered();
-
-    void on_actionWebsite_triggered();
 
     void on_actionGit_Branch_triggered();
 
@@ -725,6 +732,8 @@ private slots:
     void on_actionGit_Pull_triggered();
 
     void on_actionGit_Push_triggered();
+#endif
+    void on_actionWebsite_triggered();
 
     void on_actionFilesView_Hide_Non_Support_Files_toggled(bool arg1);
 
@@ -763,8 +772,6 @@ private slots:
     void on_actionToggle_Explorer_Panel_triggered();
 
     void on_actionToggle_Messages_Panel_triggered();
-
-    void on_chkIgnoreSpaces_stateChanged(int arg1);
 
     void on_actionRaylib_Manual_triggered();
 
@@ -847,6 +854,12 @@ private slots:
 
     void on_actionTurtle_Graphics_Manual_triggered();
 
+    void on_cbProblemCaseValidateType_currentIndexChanged(int index);
+
+    void on_actionToggle_Bookmark_triggered();
+
+    void on_actionCode_Completion_triggered();
+
 private:
     Ui::MainWindow *ui;
     bool mFullInitialized;
@@ -862,6 +875,14 @@ private:
     QMenu *mMenuRecentProjects;
     QMenu *mMenuNew;
     QMenu *mMenuInsertCodeSnippet;
+    QList<QAction *> mMenuEditBackup;
+    QList<QAction *> mMenuCodeBackup;
+    QList<QAction *> mMenuSelectionBackup;
+    QList<QAction *> mMenuRefactorBackup;
+    QList<QAction *> mMenuEncodingBackup;
+    QList<QAction *> mMenuExportBackup;
+    QList<QAction *> mMenuMoveCaretBackup;
+
     QComboBox *mCompilerSet;
     std::shared_ptr<CompilerManager> mCompilerManager;
     std::shared_ptr<Debugger> mDebugger;
@@ -869,6 +890,8 @@ private:
     SearchInFileDialog *mSearchInFilesDialog;
     SearchDialog *mSearchDialog;
     bool mQuitting;
+    bool mOpeningFiles;
+    bool mOpeningProject;
     bool mClosingProject;
     QElapsedTimer mParserTimer;
     QFileSystemWatcher mFileSystemWatcher;
@@ -901,6 +924,7 @@ private:
 
     QString mClassBrowserCurrentStatement;
     QString mFilesViewNewCreatedFolder;
+    QString mFilesViewNewCreatedFile;
 
     bool mCheckSyntaxInBack;
     bool mShouldRemoveAllSettings;
@@ -917,8 +941,7 @@ private:
     bool mClosingAll;
     bool mOpenningFiles;
     bool mSystemTurnedOff;
-    QPoint mEditorContextMenuPos;
-    QTcpServer mTcpServer;
+    CompetitiveCompanionHandler mCCHandler;
     QColor mErrorColor;
     CompileIssuesState mCompileIssuesState;
 
@@ -1010,8 +1033,8 @@ private:
     QAction * mToolsOutput_Copy;
 
     QSortFilterProxyModel *mProjectProxyModel;
-
-   // QWidget interface
+    
+    // QWidget interface
 protected:
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent* event) override;
@@ -1025,6 +1048,8 @@ public:
     bool isQuitting() const;
     const std::shared_ptr<VisitHistoryManager> &visitHistoryManager() const;
     bool closingProject() const;
+    bool openingFiles() const;
+    bool openingProject() const;
 };
 
 extern MainWindow* pMainWindow;

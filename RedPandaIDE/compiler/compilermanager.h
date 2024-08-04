@@ -19,12 +19,20 @@
 
 #include <QObject>
 #include <QMutex>
+#include "qt_utils/utils.h"
 #include "../utils.h"
 #include "../common.h"
+
+enum RunProgramFlag {
+    RPF_PAUSE_CONSOLE =     0x0001,
+    RPF_REDIRECT_INPUT =    0x0002,
+    RPF_ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+};
 
 class Runner;
 class Project;
 class Compiler;
+class ProjectCompiler;
 struct OJProblem;
 using POJProblem = std::shared_ptr<OJProblem>;
 struct OJProblemCase;
@@ -85,7 +93,8 @@ private slots:
     void onCompileIssue(PCompileIssue issue);
     void onSyntaxCheckFinished(QString filename);
     void onSyntaxCheckIssue(PCompileIssue issue);
-
+private:
+    ProjectCompiler* createProjectCompiler(std::shared_ptr<Project> project);
 private:
     Compiler* mCompiler;
     int mCompileErrorCount;
@@ -94,15 +103,10 @@ private:
     int mSyntaxCheckIssueCount;
     Compiler* mBackgroundSyntaxChecker;
     Runner* mRunner;
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    PNonExclusiveTemporaryFileOwner mTempFileOwner;
     QRecursiveMutex mCompileMutex;
     QRecursiveMutex mBackgroundSyntaxCheckMutex;
     QRecursiveMutex mRunnerMutex;
-#else
-    QMutex mCompileMutex;
-    QMutex mBackgroundSyntaxCheckMutex;
-    QMutex mRunnerMutex;
-#endif
 };
 
 class CompileError : public BaseError {

@@ -15,30 +15,47 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "editorfontwidget.h"
+#include "editor.h"
 #include "ui_editorfontwidget.h"
 #include "../settings.h"
 #include "../mainwindow.h"
+#include "../iconsmanager.h"
+#include "utils.h"
+#include "utils/font.h"
+#include "widgets/editorfontdialog.h"
+#include <qabstractitemmodel.h>
+
+Qt::ItemFlags EditorFontModel::flags(const QModelIndex &index) const
+{
+    Qt::ItemFlags flags = Qt::NoItemFlags;
+    if (index.isValid()) {
+        flags = Qt::ItemIsEnabled | Qt::ItemIsDragEnabled | Qt::ItemIsSelectable ;
+    } else if (index.row() == -1) {
+        // -1 means it's a drop target?
+        flags = Qt::ItemIsDropEnabled;
+    }
+    return flags;
+}
 
 EditorFontWidget::EditorFontWidget(const QString& name, const QString& group, QWidget *parent) :
     SettingsWidget(name,group,parent),
-    ui(new Ui::EditorFontWidget)
+    ui(new Ui::EditorFontWidget),
+    mModel(pSettings->editor().fontFamilies())
 {
     ui->setupUi(this);
+
+    QItemSelectionModel *m = ui->lstFontList->selectionModel();
+    ui->lstFontList->setModel(&mModel);
+    delete m;
+    ui->lstFontList->setDragEnabled(true);
+    ui->lstFontList->setAcceptDrops(true);
+    ui->lstFontList->setDropIndicatorShown(true);
+    ui->lstFontList->setDragDropMode(QAbstractItemView::InternalMove);
 }
 
 EditorFontWidget::~EditorFontWidget()
 {
     delete ui;
-}
-
-
-void EditorFontWidget::on_chkOnlyMonospacedFonts_stateChanged(int)
-{
-    if (ui->chkOnlyMonospacedFonts->isChecked()) {
-        ui->cbFont->setFontFilters(QFontComboBox::FontFilter::MonospacedFonts);
-    } else {
-        ui->cbFont->setFontFilters(QFontComboBox::FontFilter::AllFonts);
-    }
 }
 
 void EditorFontWidget::on_chkGutterOnlyMonospacedFonts_stateChanged(int)
@@ -48,18 +65,88 @@ void EditorFontWidget::on_chkGutterOnlyMonospacedFonts_stateChanged(int)
     } else {
         ui->cbGutterFont->setFontFilters(QFontComboBox::FontFilter::AllFonts);
     }
+    ui->cbGutterFont->view()->reset();
+}
+
+void EditorFontWidget::on_btnAddFont_clicked()
+{
+    QModelIndex index = ui->lstFontList->currentIndex();
+    int insertPos = index.isValid() ? index.row() + 1 : mModel.rowCount();
+    EditorFontDialog dlg(insertPos==0, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        mModel.insertRow(insertPos);
+        mModel.setData(mModel.index(insertPos), dlg.fontFamily());
+        ui->lstFontList->setCurrentIndex(mModel.index(insertPos));
+    }
+}
+
+void EditorFontWidget::on_btnRemoveFont_clicked()
+{
+    QModelIndex index = ui->lstFontList->currentIndex();
+    if (!index.isValid())
+        return;
+    mModel.removeRow(index.row());
+}
+
+void EditorFontWidget::on_btnModifyFont_clicked()
+{
+    QModelIndex index = ui->lstFontList->currentIndex();
+    modifyFont(index);
+}
+
+void EditorFontWidget::on_btnResetFonts_clicked()
+{
+    mModel.setStringList(defaultEditorFonts());
+}
+
+void EditorFontWidget::on_btnMoveFontToTop_clicked()
+{
+    QModelIndex index = ui->lstFontList->currentIndex();
+    if (!index.isValid())
+        return;
+    if (index.row() == 0)
+        return;
+    mModel.moveRow(QModelIndex(), index.row(), QModelIndex(), 0);
+}
+
+void EditorFontWidget::on_btnMoveFontUp_clicked()
+{
+    QModelIndex index = ui->lstFontList->currentIndex();
+    if (!index.isValid())
+        return;
+    if (index.row() == 0)
+        return;
+    mModel.moveRow(QModelIndex(), index.row(), QModelIndex(), index.row() - 1);
+}
+
+void EditorFontWidget::on_btnMoveFontDown_clicked()
+{
+    QModelIndex index = ui->lstFontList->currentIndex();
+    if (!index.isValid())
+        return;
+    if (index.row() == mModel.rowCount() - 1)
+        return;
+    mModel.moveRow(QModelIndex(), index.row(), QModelIndex(), index.row() + 2);
+}
+
+void EditorFontWidget::on_btnMoveFontToBottom_clicked()
+{
+    QModelIndex index = ui->lstFontList->currentIndex();
+    if (!index.isValid())
+        return;
+    if (index.row() == mModel.rowCount() - 1)
+        return;
+    mModel.moveRow(QModelIndex(), index.row(), QModelIndex(), mModel.rowCount());
 }
 
 void EditorFontWidget::doLoad()
 {
     //pSettings->editor().load();
     //font
-    ui->chkOnlyMonospacedFonts->setChecked(pSettings->editor().fontOnlyMonospaced());
-    ui->cbFont->setCurrentFont(QFont(pSettings->editor().fontName()));
-    ui->cbNonAsciiFont->setCurrentFont(QFont(pSettings->editor().nonAsciiFontName()));
     ui->spinFontSize->setValue(pSettings->editor().fontSize());
     ui->spinLineSpacing->setValue(pSettings->editor().lineSpacing());
     ui->chkLigature->setChecked(pSettings->editor().enableLigaturesSupport());
+    ui->chkForceFixedFontWidth->setChecked(pSettings->editor().forceFixedFontWidth());
     ui->chkLeadingSpaces->setChecked(pSettings->editor().showLeadingSpaces());
     ui->chkInnerSpaces->setChecked(pSettings->editor().showInnerSpaces());
     ui->chkTrailingSpaces->setChecked(pSettings->editor().showTrailingSpaces());
@@ -82,13 +169,12 @@ void EditorFontWidget::doLoad()
 void EditorFontWidget::doSave()
 {
     //font
-    pSettings->editor().setFontOnlyMonospaced(ui->chkOnlyMonospacedFonts->isChecked());
-    pSettings->editor().setFontName(ui->cbFont->currentFont().family());
-    pSettings->editor().setNonAsciiFontName(ui->cbNonAsciiFont->currentFont().family());
+    pSettings->editor().setFontFamilies(mModel.stringList());
     pSettings->editor().setFontSize(ui->spinFontSize->value());
     pSettings->editor().setLineSpacing(ui->spinLineSpacing->value());
 
     pSettings->editor().setEnableLigaturesSupport(ui->chkLigature->isChecked());
+    pSettings->editor().setForceFixedFontWidth(ui->chkForceFixedFontWidth->isChecked());
     pSettings->editor().setShowLeadingSpaces(ui->chkLeadingSpaces->isChecked());
     pSettings->editor().setShowInnerSpaces(ui->chkInnerSpaces->isChecked());
     pSettings->editor().setShowTrailingSpaces(ui->chkTrailingSpaces->isChecked());
@@ -108,5 +194,34 @@ void EditorFontWidget::doSave()
     pSettings->editor().setGutterFontSize(ui->spinGutterFontSize->value());
 
     pSettings->editor().save();
+    QFont::cleanup();
     pMainWindow->updateEditorSettings();
 }
+
+void EditorFontWidget::updateIcons(const QSize &/*size*/) {
+    pIconsManager->setIcon(ui->btnAddFont, IconsManager::ACTION_MISC_ADD);
+    pIconsManager->setIcon(ui->btnRemoveFont, IconsManager::ACTION_MISC_REMOVE);
+    pIconsManager->setIcon(ui->btnModifyFont, IconsManager::ACTION_MISC_RENAME);
+    pIconsManager->setIcon(ui->btnResetFonts, IconsManager::ACTION_MISC_RESET);
+    pIconsManager->setIcon(ui->btnMoveFontToTop, IconsManager::ACTION_MISC_MOVETOP);
+    pIconsManager->setIcon(ui->btnMoveFontUp, IconsManager::ACTION_MISC_MOVEUP);
+    pIconsManager->setIcon(ui->btnMoveFontDown, IconsManager::ACTION_MISC_MOVEDOWN);
+    pIconsManager->setIcon(ui->btnMoveFontToBottom, IconsManager::ACTION_MISC_MOVEBOTTOM);
+}
+
+void EditorFontWidget::on_lstFontList_doubleClicked(const QModelIndex &index)
+{
+    modifyFont(index);
+}
+
+void EditorFontWidget::modifyFont(const QModelIndex &index)
+{
+    if (!index.isValid())
+        return;
+    EditorFontDialog dlg(index.row()==0, this);
+    dlg.setFontFamily(mModel.data(index, Qt::DisplayRole).toString());
+    if (dlg.exec() == QDialog::Accepted) {
+        mModel.setData(index, dlg.fontFamily());
+    }
+}
+

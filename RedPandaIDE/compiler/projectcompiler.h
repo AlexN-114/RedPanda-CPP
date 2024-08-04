@@ -26,10 +26,10 @@ class ProjectCompiler : public Compiler
 {
     Q_OBJECT
 public:
-    ProjectCompiler(std::shared_ptr<Project> project, bool silent,bool onlyCheckSyntax);
+    ProjectCompiler(std::shared_ptr<Project> project);
     ProjectCompiler(const ProjectCompiler&)=delete;
     ProjectCompiler& operator=(const ProjectCompiler&)=delete;
-    void buildMakeFile();
+    virtual void buildMakeFile();
 
     bool onlyClean() const;
     void setOnlyClean(bool newOnlyClean);
@@ -39,8 +39,9 @@ private:
     void createStaticMakeFile();
     void createDynamicMakeFile();
     void newMakeFile(QFile& file);
+    void newMakeFile(QFile& file, bool &genModuleDef);
     void writeMakeHeader(QFile& file);
-    void writeMakeDefines(QFile& file);
+    void writeMakeDefines(QFile& file, bool &genModuleDef);
     void writeMakeTarget(QFile& file);
     void writeMakeIncludes(QFile& file);
     void writeMakeClean(QFile& file);

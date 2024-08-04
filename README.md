@@ -1,18 +1,21 @@
 # RedPanda C++ 
 Red Panda C++ (Old name: Red Panda Dev-C++ 7) is an fast ,lightweight, open source, and cross platform C/C++/GNU Assembly IDE.
 
-Simplified Chinese Website: [https://royqh1979.gitee.io/redpandacpp/](https://royqh1979.gitee.io/redpandacpp/)
+Simplified Chinese Website: [http://royqh.net/redpandacpp](http://royqh.net/redpandacpp)
 
 English Website: [https://sourceforge.net/projects/redpanda-cpp](https://sourceforge.net/projects/redpanda-cpp)
+
+[Donate to this project](https://ko-fi.com/royqh1979)
 
 New Features (Compared with Red Panda Dev-C++ 6):
 * Cross Platform (Windows/Linux/MacOS)
 * Problem Set (run and test program against predefined input / expected output data)
-* Competitve Companion support ( It's an chrome/firefox extension that can fetch problems from OJ websites)
+* Competitive Companion support ( It's an chrome/firefox extension that can fetch problems from OJ websites)
 * Edit/compile/run/debug GNU Assembly language programs.
 * Find symbol occurrences
 * Memory View for debugging
 * TODO View
+* Support SDCC Compiler
 
 UI Improvements:
 * Full high-dpi support, including fonts and icons
@@ -26,7 +29,7 @@ Editing Improvements:
 * Enhanced code completion
 * Better code folding support
 
-Debuging Improvements:
+Debugging Improvements:
 * Use gdb/mi interface
 * Enhanced watch
 * gdbserver mode
@@ -39,4 +42,4 @@ Code Intellisense Improvements:
 * Support MACRO with arguments
 * Support C++ lambdas
 
-And many other improvements and bug fixes. See NEWS.md for full informantion.
+And many other improvements and bug fixes. See NEWS.md for full information.

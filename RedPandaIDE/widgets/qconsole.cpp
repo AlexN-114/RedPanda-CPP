@@ -31,11 +31,11 @@
 #include "../utils.h"
 
 QConsole::QConsole(QWidget *parent):
-    QAbstractScrollArea(parent),
-    mContents(this),
-    mContentImage()
+    QAbstractScrollArea{parent},
+    mContents{this},
+    mContentImage{}
 {
-    mHistorySize = 500;
+    mMaxHistory = 500;
     mHistoryIndex = -1;
     mCommand = "";
     mCurrentEditableLine = "";
@@ -73,14 +73,14 @@ QConsole::QConsole(QWidget *parent):
 
 }
 
-int QConsole::historySize() const
+int QConsole::maxHistory() const
 {
-    return mHistorySize;
+    return mMaxHistory;
 }
 
-void QConsole::setHistorySize(int historySize)
+void QConsole::setMaxHistory(int historySize)
 {
-    mHistorySize = historySize;
+    mMaxHistory = historySize;
 }
 
 int QConsole::tabSize() const
@@ -223,6 +223,7 @@ void QConsole::selectAll()
     if (mContents.lines()>0) {
         mSelectionBegin = {1,1};
         mSelectionEnd = { mContents.getLastLine().length()+1,mContents.lines()};
+        invalidate();
     }
 }
 
@@ -251,7 +252,7 @@ QString QConsole::selText()
         QString s = mContents.getLine(Last);
         if (Last == mContents.lines())
             s+= this->mCommand;
-        result += s.leftRef(ColTo);
+        result.append(s.constData(), ColTo);
         return result;
     }
 }
@@ -481,9 +482,7 @@ void QConsole::contentsLastRowsChanged(int rowCount)
 void QConsole::scrollTimerHandler()
 
 {
-    QPoint iMousePos;
-
-    iMousePos = QCursor::pos();
+    QPoint iMousePos = QCursor::pos();
     iMousePos = mapFromGlobal(iMousePos);
     RowColumn mousePosRC = pixelsToNearestRowColumn(iMousePos.x(),iMousePos.y());
 
@@ -543,14 +542,15 @@ void QConsole::mouseMoveEvent(QMouseEvent *event)
 {
     QAbstractScrollArea::mouseMoveEvent(event);
     Qt::MouseButtons buttons = event->buttons();
-    int X=event->pos().x();
-    int Y=event->pos().y();
+    int x=event->pos().x();
+    int y=event->pos().y();
 
     if ((buttons == Qt::LeftButton)) {
       // should we begin scrolling?
-      computeScrollY(Y);
-      RowColumn mousePosRC = pixelsToNearestRowColumn(X, Y);
+      computeScrollY(y);
+      RowColumn mousePosRC = pixelsToNearestRowColumn(x, y);
       LineChar mousePos = mContents.rowColumnToLineChar(mousePosRC);
+      //qDebug()<<x<<y<<mousePosRC.row<<mousePosRC.column<<mousePos.line<<mousePos.ch;
       if (mScrollDeltaY == 0) {
           int oldStartRow = mContents.lineCharToRowColumn(selectionBegin()).row+1;
           int oldEndRow = mContents.lineCharToRowColumn(selectionEnd()).row+1;
@@ -571,32 +571,28 @@ void QConsole::keyPressEvent(QKeyEvent *event)
         if (mReadonly)
             return;
         emit commandInput(mCommand);
-        if (mHistorySize>0) {
-            if (mCommandHistory.size()==mHistorySize) {
-                mCommandHistory.pop_front();
-                mHistoryIndex--;
+        if (mMaxHistory>0 && !mCommand.trimmed().isEmpty()) {
+            if (mCommandHistory.isEmpty()
+                || mCommandHistory.last()!=mCommand) {
+                if (mCommandHistory.length()==mMaxHistory) {
+                    mCommandHistory.pop_front();
+                }
+                mCommandHistory.append(mCommand);
             }
-            if (mCommandHistory.size()==0 || mHistoryIndex<0 || mHistoryIndex == mCommandHistory.size()-1) {
-                mHistoryIndex=mCommandHistory.size();
-            }
-            mCommandHistory.append(mCommand);
+            mHistoryIndex = mCommandHistory.length();
         }
         mCommand="";
         addLine("");
         return;
     case Qt::Key_Up:
         event->accept();
-        if (mHistorySize>0 && mHistoryIndex>0) {
-            mHistoryIndex--;
-            loadCommandFromHistory();
-        }
+        mHistoryIndex--;
+        loadCommandFromHistory();
         return;
     case Qt::Key_Down:
         event->accept();
-        if (mHistorySize>0 && mHistoryIndex<mCommandHistory.size()-1) {
-            mHistoryIndex++;
-            loadCommandFromHistory();
-        }
+        mHistoryIndex++;
+        loadCommandFromHistory();
         return;
     case Qt::Key_Left:
         event->accept();
@@ -729,7 +725,7 @@ void QConsole::paintEvent(QPaintEvent *event)
         QPainter cachePainter(mContentImage.get());
         cachePainter.setFont(font());
         if (viewport()->rect() == rcClip) {
-            painter.fillRect(rcClip, mBackground);
+            cachePainter.fillRect(rcClip, mBackground);
         }
         paintRows(cachePainter,nL1,nL2);
         painter.drawImage(rcClip,*mContentImage,rcClip);
@@ -792,9 +788,16 @@ void QConsole::textInputed(const QString &text)
 
 void QConsole::loadCommandFromHistory()
 {
-    if (mHistorySize<=0)
+    if (mMaxHistory<=0)
         return;
-    mCommand = mCommandHistory[mHistoryIndex];
+    if (mHistoryIndex<0)
+        mHistoryIndex=0;
+    if (mHistoryIndex<mCommandHistory.length())
+        mCommand = mCommandHistory[mHistoryIndex];
+    else
+        mCommand = "";
+    if (mHistoryIndex>mCommandHistory.length())
+        mHistoryIndex=mCommandHistory.length();
     QString lastLine = mContents.getLastLine();
     int len=mCurrentEditableLine.length();
     lastLine.remove(lastLine.length()-len,INT_MAX);
@@ -886,13 +889,13 @@ bool QConsole::hasSelection()
             || (mSelectionBegin.ch != mSelectionEnd.ch);
 }
 
-int QConsole::computeScrollY(int Y)
+int QConsole::computeScrollY(int y)
 {
     QRect iScrollBounds = viewport()->rect();
-    if (Y < iScrollBounds.top())
-        mScrollDeltaY = (Y - iScrollBounds.top()) / mRowHeight - 1;
-    else if (Y >= iScrollBounds.bottom())
-        mScrollDeltaY = (Y - iScrollBounds.bottom()) / mRowHeight + 1;
+    if (y < iScrollBounds.top())
+        mScrollDeltaY = (y - iScrollBounds.top()) / mRowHeight - 1;
+    else if (y >= iScrollBounds.bottom())
+        mScrollDeltaY = (y - iScrollBounds.bottom()) / mRowHeight + 1;
     else
         mScrollDeltaY = 0;
 
@@ -1159,13 +1162,18 @@ LineChar ConsoleLines::rowColumnToLineChar(int row, int column)
             int r=row - rows;
             QString fragment = line->fragments[r];
             int columnsBefore = 0;
+            int charsBefore = 0;
+            for (int j=0;j<r;j++) {
+                charsBefore += line->fragments[j].length();
+            }
             for (int j=0;j<fragment.size();j++) {
                 QChar ch = fragment[j];
                 int charColumns= mConsole->charColumns(ch, columnsBefore);
                 if (column>=columnsBefore && column<columnsBefore+charColumns) {
-                    result.ch = j;
+                    result.ch = charsBefore + j;
                     break;
                 }
+                columnsBefore += charColumns;
             }
             result.line = i;
             break;

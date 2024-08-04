@@ -92,13 +92,13 @@ std::shared_ptr<Project> Project::create(
     ini.SetValue("Project","filename", toByteArray(extractRelativePath(project->directory(),
                                                                        project->mFilename)));
     ini.SetValue("Project","name", toByteArray(project->mName));
-    ini.SaveFile(project->mFilename.toLocal8Bit());
     project->mParser->setEnabled(false);
     if (!project->assignTemplate(pTemplate,useCpp))
         return std::shared_ptr<Project>();
     resetCppParser(project->mParser, project->mOptions.compilerSet);
 
     project->mModified = true;
+    ini.SaveFile(project->mFilename.toLocal8Bit());
     return project;
 }
 
@@ -123,13 +123,23 @@ QString Project::directory() const
     return fileInfo.absolutePath();
 }
 
-QString Project::executable() const
+QString Project::outputFilename() const
 {
     QString exeFileName;
-    if (mOptions.overrideOutput && !mOptions.overridenOutput.isEmpty()) {
-        exeFileName = mOptions.overridenOutput;
+    if (mOptions.useCustomOutputFilename && !mOptions.customOutputFilename.isEmpty()) {
+        exeFileName = mOptions.customOutputFilename;
     } else {
         switch(mOptions.type) {
+#ifdef ENABLE_SDCC
+        case ProjectType::MicroController: {
+            Settings::PCompilerSet pSet=pSettings->compilerSets().getSet(mOptions.compilerSet);
+            if (pSet)
+                exeFileName = changeFileExt(extractFileName(mFilename),pSet->executableSuffix());
+            else
+                exeFileName = changeFileExt(extractFileName(mFilename),SDCC_HEX_SUFFIX);
+            }
+            break;
+#endif
         case ProjectType::StaticLib:
             exeFileName = changeFileExt(extractFileName(mFilename),STATIC_LIB_EXT);
             if (!exeFileName.startsWith("lib"))
@@ -145,9 +155,9 @@ QString Project::executable() const
         }
     }
     QString exePath;
-    if (!mOptions.exeOutput.isEmpty()) {
+    if (!mOptions.folderForOutput.isEmpty()) {
         QDir baseDir(directory());
-        exePath = baseDir.filePath(mOptions.exeOutput);
+        exePath = baseDir.filePath(mOptions.folderForOutput);
     } else {
         exePath = directory();
     }
@@ -242,7 +252,10 @@ void Project::open()
         newUnit->setOverrideBuildCmd(ini.GetBoolValue(groupName,"OverrideBuildCmd", false));
         newUnit->setBuildCmd(fromByteArray(ini.GetValue(groupName,"BuildCmd", "")));
         newUnit->setEncoding(ini.GetValue(groupName, "FileEncoding",ENCODING_PROJECT));
-        if (QTextCodec::codecForName(newUnit->encoding())==nullptr) {
+        if (newUnit->encoding()!=ENCODING_UTF16_BOM &&
+                newUnit->encoding()!=ENCODING_UTF8_BOM &&
+                newUnit->encoding()!=ENCODING_UTF32_BOM &&
+                QTextCodec::codecForName(newUnit->encoding())==nullptr) {
             newUnit->setEncoding(ENCODING_PROJECT);
         }
         newUnit->setRealEncoding(ini.GetValue(groupName, "RealEncoding",ENCODING_ASCII));
@@ -412,8 +425,8 @@ Editor *Project::openUnit(PProjectUnit &unit, const PProjectEditorLayout &layout
             //editor->setInProject(true);
             editor->setCaretY(layout->caretY);
             editor->setCaretX(layout->caretX);
-            editor->setTopLine(layout->topLine);
-            editor->setLeftChar(layout->leftChar);
+            editor->setTopPos(layout->top);
+            editor->setLeftPos(layout->left);
             editor->activate();
             return editor;
         }
@@ -525,12 +538,8 @@ bool Project::internalRemoveUnit(PProjectUnit& unit, bool doClose , bool removeF
     }
 
     if (removeFile) {
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,2)
         if (!QFile::moveToTrash(unit->fileName()))
             QFile::remove(unit->fileName());
-#else
-        QFile::remove(unit->fileName());
-#endif
     }
 
 //if not fUnits.GetItem(index).fNew then
@@ -649,8 +658,8 @@ void Project::saveLayout()
             jsonLayout["filename"]=unit->fileName();
             jsonLayout["caretX"]=editor->caretX();
             jsonLayout["caretY"]=editor->caretY();
-            jsonLayout["topLine"]=editor->topLine();
-            jsonLayout["leftChar"]=editor->leftChar();
+            jsonLayout["top"]=editor->topPos();
+            jsonLayout["left"]=editor->leftPos();
             jsonLayout["isOpen"]=true;
             jsonLayout["focused"]=(editor==e);
             int order=editorOrderSet.value(editor->filename(),-1);
@@ -665,8 +674,8 @@ void Project::saveLayout()
                 jsonLayout["filename"]=unit->fileName();
                 jsonLayout["caretX"]=oldLayout->caretX;
                 jsonLayout["caretY"]=oldLayout->caretY;
-                jsonLayout["topLine"]=oldLayout->topLine;
-                jsonLayout["leftChar"]=oldLayout->leftChar;
+                jsonLayout["top"]=oldLayout->top;
+                jsonLayout["left"]=oldLayout->left;
                 jsonLayout["isOpen"]=false;
                 jsonLayout["focused"]=false;
                 jsonLayouts.append(jsonLayout);
@@ -695,17 +704,17 @@ void Project::renameUnit(PProjectUnit& unit, const QString &newFileName)
         mParser->addProjectFile(newFileName,true);
     }
 
+    if (mParser)
+        mParser->invalidateFile(unit->fileName());
     Editor * editor=unitEditor(unit);
     if (editor) {
         //prevent recurse
         editor->saveAs(newFileName,true);
     } else {
-        if (mParser)
-            mParser->invalidateFile(unit->fileName());
         copyFile(unit->fileName(),newFileName,true);
-        if (mParser)
-            mParser->parseFile(newFileName,true);
     }
+    if (mParser)
+        mParser->parseFile(newFileName,true);
 
     internalRemoveUnit(unit,false,true);
 
@@ -923,8 +932,9 @@ void Project::setCompilerSet(int compilerSetIndex)
 bool Project::assignTemplate(const std::shared_ptr<ProjectTemplate> aTemplate, bool useCpp)
 {
     if (!aTemplate) {
-        return true;
+        return false;
     }
+
     mModel.beginUpdate();
     mRootNode = makeProjectNode();
     rebuildNodes();
@@ -958,15 +968,19 @@ bool Project::assignTemplate(const std::shared_ptr<ProjectTemplate> aTemplate, b
         for (int i=0;i<aTemplate->unitCount();i++) {
             // Pick file contents
             PTemplateUnit templateUnit = aTemplate->unit(i);
+            if (!templateUnit)
+                continue;
             if (!templateUnit->Source.isEmpty()) {
                 QString target = templateUnit->Source;
                 PProjectUnit unit;
                 if (!templateUnit->Target.isEmpty())
                     target = templateUnit->Target;
-                QFile::copy(
-                            cleanPath(dir.absoluteFilePath(templateUnit->Source)),
-                            includeTrailingPathDelimiter(this->directory())+target);
                 unit = newUnit(mRootNode, target);
+                if (templateUnit->overwrite || !fileExists(unit->fileName()) ) {
+                        QFile::copy(
+                                    cleanPath(dir.absoluteFilePath(templateUnit->Source)),
+                                    includeTrailingPathDelimiter(this->directory())+target);
+                }
 
                 FileType fileType=getFileType(unit->fileName());
                 if ( fileType==FileType::GAS
@@ -995,20 +1009,22 @@ bool Project::assignTemplate(const std::shared_ptr<ProjectTemplate> aTemplate, b
                             this,
                             true);
 
-                QString s2 = cleanPath(dir.absoluteFilePath(s));
-                if (fileExists(s2) && !s.isEmpty()) {
-                    try {
-                        editor->loadFile(s2);
-                    } catch(FileError& e) {
-                        QMessageBox::critical(nullptr,
-                                              tr("Error Load File"),
-                                              e.reason());
+                if (templateUnit->overwrite || !fileExists(unit->fileName()) ) {
+                    QString s2 = cleanPath(dir.absoluteFilePath(s));
+                    if (fileExists(s2) && !s.isEmpty()) {
+                        try {
+                            editor->loadFile(s2);
+                        } catch(FileError& e) {
+                            QMessageBox::critical(nullptr,
+                                                  tr("Error Load File"),
+                                                  e.reason());
+                        }
+                    } else {
+                        s.replace("#13#10","\r\n");
+                        editor->insertString(s,false);
                     }
-                } else {
-                    s.replace("#13#10","\r\n");
-                    editor->insertString(s,false);
+                    editor->save(true,false);
                 }
-                editor->save(true,false);
                 editor->activate();
             }
         }
@@ -1070,12 +1086,12 @@ bool Project::saveAsTemplate(const QString &templateFolder,
         ini->SetBoolValue("Project", "IncludeVersionInfo", true);
     if (mOptions.supportXPThemes)
         ini->SetBoolValue("Project", "SupportXPThemes", true);
-    if (!mOptions.exeOutput.isEmpty())
-        ini->SetValue("Project", "ExeOutput", extractRelativePath(directory(),mOptions.exeOutput).toUtf8());
-    if (!mOptions.objectOutput.isEmpty())
-        ini->SetValue("Project", "ObjectOutput", extractRelativePath(directory(),mOptions.objectOutput).toUtf8());
-    if (!mOptions.logOutput.isEmpty())
-        ini->SetValue("Project", "LogOutput", extractRelativePath(directory(),mOptions.logOutput).toUtf8());
+    if (!mOptions.folderForOutput.isEmpty())
+        ini->SetValue("Project", "ExeOutput", extractRelativePath(directory(),mOptions.folderForOutput).toUtf8());
+    if (!mOptions.folderForObjFiles.isEmpty())
+        ini->SetValue("Project", "ObjectOutput", extractRelativePath(directory(),mOptions.folderForObjFiles).toUtf8());
+    if (!mOptions.logFilename.isEmpty())
+        ini->SetValue("Project", "LogOutput", extractRelativePath(directory(),mOptions.logFilename).toUtf8());
     if (mOptions.execEncoding!=ENCODING_SYSTEM_DEFAULT)
         ini->SetValue("Project","ExecEncoding", mOptions.execEncoding);
 
@@ -1170,12 +1186,12 @@ void Project::saveOptions()
     ini.SetValue("Project", "ResourceCommand", toByteArray(textToLines(mOptions.resourceCmd).join(" ")));
     ini.SetLongValue("Project","IsCpp", mOptions.isCpp);
     ini.SetValue("Project","Icon", toByteArray(extractRelativePath(directory(), mOptions.icon)));
-    ini.SetValue("Project","ExeOutput", toByteArray(extractRelativePath(directory(),mOptions.exeOutput)));
-    ini.SetValue("Project","ObjectOutput", toByteArray(extractRelativePath(directory(),mOptions.objectOutput)));
-    ini.SetValue("Project","LogOutput", toByteArray(extractRelativePath(directory(),mOptions.logOutput)));
-    ini.SetLongValue("Project","LogOutputEnabled", mOptions.logOutputEnabled);
-    ini.SetLongValue("Project","OverrideOutput", mOptions.overrideOutput);
-    ini.SetValue("Project","OverrideOutputName", toByteArray(mOptions.overridenOutput));
+    ini.SetValue("Project","ExeOutput", toByteArray(extractRelativePath(directory(),mOptions.folderForOutput)));
+    ini.SetValue("Project","ObjectOutput", toByteArray(extractRelativePath(directory(),mOptions.folderForObjFiles)));
+    ini.SetValue("Project","LogOutput", toByteArray(extractRelativePath(directory(),mOptions.logFilename)));
+    ini.SetLongValue("Project","LogOutputEnabled", mOptions.logOutput);
+    ini.SetLongValue("Project","OverrideOutput", mOptions.useCustomOutputFilename);
+    ini.SetValue("Project","OverrideOutputName", toByteArray(mOptions.customOutputFilename));
     ini.SetValue("Project","HostApplication", toByteArray(extractRelativePath(directory(), mOptions.hostApplication)));
     ini.SetLongValue("Project","UseCustomMakefile", mOptions.useCustomMakefile);
     ini.SetValue("Project","CustomMakefile", toByteArray(extractRelativePath(directory(),mOptions.customMakefile)));
@@ -1342,6 +1358,8 @@ QString Project::folder()
 
 void Project::buildPrivateResource()
 {
+    if (mOptions.type == ProjectType::MicroController)
+        return;
     int comp = 0;
     foreach (const PProjectUnit& unit,mUnits) {
         if (
@@ -1403,11 +1421,7 @@ void Project::buildPrivateResource()
         if (
                 (getFileType(unit->fileName()) == FileType::WindowsResourceSource)
                 && unit->compile() )
-            contents.append("#include \"" +
-                           genMakePath(
-                               extractRelativePath(directory(), unit->fileName()),
-                               false,
-                               false) + "\"");
+            contents.append("#include \"" + extractRelativePath(directory(), unit->fileName()) + "\"");
     }
 
     if (!mOptions.icon.isEmpty()) {
@@ -1428,15 +1442,12 @@ void Project::buildPrivateResource()
       contents.append("// THIS WILL MAKE THE PROGRAM USE THE COMMON CONTROLS");
       contents.append("// LIBRARY VERSION 6.0 (IF IT IS AVAILABLE)");
       contents.append("//");
-      if (!mOptions.exeOutput.isEmpty())
+      if (!mOptions.folderForOutput.isEmpty())
           contents.append(
-                    "1 24 \"" +
-                       genMakePath2(
-                           includeTrailingPathDelimiter(mOptions.exeOutput)
-                           + extractFileName(executable()))
-                + ".Manifest\"");
+                    "1 24 \"" + includeTrailingPathDelimiter(mOptions.folderForOutput)
+                      + extractFileName(outputFilename()) + ".Manifest\"");
       else
-          contents.append("1 24 \"" + extractFileName(executable()) + ".Manifest\"");
+          contents.append("1 24 \"" + extractFileName(outputFilename()) + ".Manifest\"");
     }
 
     if (mOptions.includeVersionInfo) {
@@ -1467,6 +1478,8 @@ void Project::buildPrivateResource()
             break;
         case ProjectType::DynamicLib:
             contents.append("FILETYPE VFT_DLL");
+            break;
+        default:
             break;
         }
         contents.append("{");
@@ -1530,9 +1543,6 @@ void Project::buildPrivateResource()
           QFile::remove(resFile);
       mOptions.privateResource = "";
     }
-//    if fileExists(Res) then
-//      FileSetDate(Res, DateTimeToFileDate(Now)); // fix the "Clock skew detected" warning ;)
-
     // create XP manifest
     if (mOptions.supportXPThemes) {
         QStringList content;
@@ -1561,15 +1571,17 @@ void Project::buildPrivateResource()
         content.append("    </dependentAssembly>");
         content.append("</dependency>");
         content.append("</assembly>");
-        stringsToFile(content,executable() + ".Manifest");
-    } else if (fileExists(executable() + ".Manifest"))
-        QFile::remove(executable() + ".Manifest");
+        stringsToFile(content,outputFilename() + ".Manifest");
+    }
 
     // create private header file
     QString hFile = changeFileExt(rcFile, H_EXT);
     contents.clear();
-    QString def = extractFileName(rcFile);
+    QString def = extractFileName(hFile);
     def.replace(".","_");
+    def = def.toUpper();
+    if (def.front().isDigit())
+        def = "PROJECT_"+def;
     contents.append("/* THIS FILE WILL BE OVERWRITTEN BY Red Panda C++ */");
     contents.append("/* DO NOT EDIT ! */");
     contents.append("");
@@ -1619,13 +1631,7 @@ void Project::checkProjectFileForUpdate(SimpleIni &ini)
     if (!oldRes.isEmpty()) {
         QFile::copy(mFilename,mFilename+".bak");
         QStringList sl;
-        sl = oldRes.split(';',
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-            Qt::SkipEmptyParts
-#else
-            QString::SkipEmptyParts
-#endif
-                          );
+        sl = oldRes.split(';', Qt::SkipEmptyParts);
         for (int i=0;i<sl.count();i++){
             const QString& s = sl[i];
             QByteArray groupName = toByteArray(QString("Unit%1").arg(uCount+i));
@@ -1900,14 +1906,14 @@ PProjectModelNode Project::getParentFileSystemFolderNode(const QString &filename
 void Project::incrementBuildNumber()
 {
     mOptions.versionInfo.build++;
-    mOptions.versionInfo.fileVersion = QString("%1.%2.%3.%3")
+    mOptions.versionInfo.fileVersion = QString("%1.%2.%3.%4")
             .arg(mOptions.versionInfo.major)
             .arg(mOptions.versionInfo.minor)
             .arg(mOptions.versionInfo.release)
             .arg(mOptions.versionInfo.build);
     if (mOptions.versionInfo.syncProduct)
         mOptions.versionInfo.productVersion = mOptions.versionInfo.fileVersion;
-    setModified(true);
+    saveOptions();
 }
 
 QHash<QString, PProjectEditorLayout> Project::loadLayout()
@@ -1917,7 +1923,9 @@ QHash<QString, PProjectEditorLayout> Project::loadLayout()
     QFile file(jsonFilename);
     if (!file.open(QIODevice::ReadOnly))
         return layouts;
-    QByteArray content = file.readAll();
+    QByteArray content = file.readAll().trimmed();
+    if (content.isEmpty())
+        return layouts;
     QJsonParseError parseError;
     QJsonDocument doc(QJsonDocument::fromJson(content,&parseError));
     file.close();
@@ -1932,8 +1940,8 @@ QHash<QString, PProjectEditorLayout> Project::loadLayout()
         if (mUnits.contains(unitFilename)) {
             PProjectEditorLayout editorLayout = std::make_shared<ProjectEditorLayout>();
             editorLayout->filename=unitFilename;
-            editorLayout->topLine=jsonLayout["topLine"].toInt();
-            editorLayout->leftChar=jsonLayout["leftChar"].toInt();
+            editorLayout->top=jsonLayout["top"].toInt();
+            editorLayout->left=jsonLayout["left"].toInt();
             editorLayout->caretX=jsonLayout["caretX"].toInt();
             editorLayout->caretY=jsonLayout["caretY"].toInt();
             editorLayout->order=jsonLayout["order"].toInt(-1);
@@ -1974,62 +1982,26 @@ void Project::loadOptions(SimpleIni& ini)
         mOptions.cppCompilerCmd = fromByteArray(ini.GetValue("Project", "CppCompiler", "")).replace(";CONFIG_LINE;","\n");
         mOptions.linkerCmd = fromByteArray(ini.GetValue("Project", "Linker", "")).replace(";CONFIG_LINE;","\n");
         mOptions.resourceCmd = fromByteArray(ini.GetValue("Project", "ResourceCommand", "")).replace(";CONFIG_LINE;","\n");
-        mOptions.binDirs = absolutePaths(fromByteArray(ini.GetValue("Project", "Bins", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-            Qt::SkipEmptyParts
-#else
-            QString::SkipEmptyParts
-#endif
-        ));
-        mOptions.libDirs = absolutePaths(fromByteArray(ini.GetValue("Project", "Libs", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-            Qt::SkipEmptyParts
-#else
-            QString::SkipEmptyParts
-#endif
-        ));
-        mOptions.includeDirs = absolutePaths(fromByteArray(ini.GetValue("Project", "Includes", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-            Qt::SkipEmptyParts
-#else
-            QString::SkipEmptyParts
-#endif
-        ));
+        mOptions.binDirs = absolutePaths(fromByteArray(ini.GetValue("Project", "Bins", "")).split(";", Qt::SkipEmptyParts));
+        mOptions.libDirs = absolutePaths(fromByteArray(ini.GetValue("Project", "Libs", "")).split(";", Qt::SkipEmptyParts));
+        mOptions.includeDirs = absolutePaths(fromByteArray(ini.GetValue("Project", "Includes", "")).split(";", Qt::SkipEmptyParts));
         mOptions.privateResource = fromByteArray(ini.GetValue("Project", "PrivateResource", ""));
-        mOptions.resourceIncludes = absolutePaths(fromByteArray(ini.GetValue("Project", "ResourceIncludes", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-         Qt::SkipEmptyParts
-#else
-         QString::SkipEmptyParts
-#endif
-        ));
-        mOptions.makeIncludes = absolutePaths(fromByteArray(ini.GetValue("Project", "MakeIncludes", "")).split(";",
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-         Qt::SkipEmptyParts
-#else
-         QString::SkipEmptyParts
-#endif
-        ));
+        mOptions.resourceIncludes = absolutePaths(fromByteArray(ini.GetValue("Project", "ResourceIncludes", "")).split(";", Qt::SkipEmptyParts));
+        mOptions.makeIncludes = absolutePaths(fromByteArray(ini.GetValue("Project", "MakeIncludes", "")).split(";", Qt::SkipEmptyParts));
         mOptions.isCpp = ini.GetBoolValue("Project", "IsCpp", false);
-        mOptions.exeOutput = generateAbsolutePath(directory(), fromByteArray(ini.GetValue("Project", "ExeOutput", "")));
-        mOptions.objectOutput =  generateAbsolutePath(directory(), fromByteArray(ini.GetValue("Project", "ObjectOutput", "")));
-        mOptions.logOutput = generateAbsolutePath(directory(), fromByteArray(ini.GetValue("Project", "LogOutput", "")));
-        mOptions.logOutputEnabled = ini.GetBoolValue("Project", "LogOutputEnabled", false);
-        mOptions.overrideOutput = ini.GetBoolValue("Project", "OverrideOutput", false);
-        mOptions.overridenOutput = fromByteArray(ini.GetValue("Project", "OverrideOutputName", ""));
+        mOptions.folderForOutput = generateAbsolutePath(directory(), fromByteArray(ini.GetValue("Project", "ExeOutput", "")));
+        mOptions.folderForObjFiles =  generateAbsolutePath(directory(), fromByteArray(ini.GetValue("Project", "ObjectOutput", "")));
+        mOptions.logFilename = generateAbsolutePath(directory(), fromByteArray(ini.GetValue("Project", "LogOutput", "")));
+        mOptions.logOutput = ini.GetBoolValue("Project", "LogOutputEnabled", false);
+        mOptions.useCustomOutputFilename = ini.GetBoolValue("Project", "OverrideOutput", false);
+        mOptions.customOutputFilename = fromByteArray(ini.GetValue("Project", "OverrideOutputName", ""));
         mOptions.hostApplication = generateAbsolutePath(directory(), fromByteArray(ini.GetValue("Project", "HostApplication", "")));
         mOptions.useCustomMakefile = ini.GetBoolValue("Project", "UseCustomMakefile", false);
         mOptions.customMakefile = generateAbsolutePath(directory(),fromByteArray(ini.GetValue("Project", "CustomMakefile", "")));
         mOptions.usePrecompiledHeader = ini.GetBoolValue("Project", "UsePrecompiledHeader", false);
         mOptions.precompiledHeader = generateAbsolutePath(directory(),fromByteArray(ini.GetValue("Project", "PrecompiledHeader", "")));
         mOptions.cmdLineArgs = fromByteArray(ini.GetValue("Project", "CommandLine", ""));
-        mFolders = fromByteArray(ini.GetValue("Project", "Folders", "")).split(";",
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                   Qt::SkipEmptyParts
-        #else
-                   QString::SkipEmptyParts
-        #endif
-               );
+        mFolders = fromByteArray(ini.GetValue("Project", "Folders", "")).split(";", Qt::SkipEmptyParts);
         mOptions.includeVersionInfo = ini.GetBoolValue("Project", "IncludeVersionInfo", false);
         mOptions.supportXPThemes = ini.GetBoolValue("Project", "SupportXPThemes", false);
         mOptions.compilerSet = ini.GetLongValue("Project", "CompilerSet", pSettings->compilerSets().defaultIndex());
@@ -2142,7 +2114,7 @@ void Project::loadOptions(SimpleIni& ini)
         mOptions.versionInfo.legalCopyright = fromByteArray(ini.GetValue("VersionInfo", "LegalCopyright", ""));
         mOptions.versionInfo.legalTrademarks = fromByteArray(ini.GetValue("VersionInfo", "LegalTrademarks", ""));
         mOptions.versionInfo.originalFilename = fromByteArray(ini.GetValue("VersionInfo", "OriginalFilename",
-                                                                toByteArray(extractFileName(executable()))));
+                                                                           toByteArray(extractFileName(outputFilename()))));
         mOptions.versionInfo.productName = fromByteArray(ini.GetValue("VersionInfo", "ProductName", toByteArray(mName)));
         mOptions.versionInfo.productVersion = fromByteArray(ini.GetValue("VersionInfo", "ProductVersion", "0.1.1.1"));
         mOptions.versionInfo.autoIncBuildNr = ini.GetBoolValue("VersionInfo", "AutoIncBuildNr", false);
@@ -2162,8 +2134,8 @@ void Project::loadUnitLayout(Editor *e)
     if (layout) {
         e->setCaretY(layout->caretY);
         e->setCaretX(layout->caretX);
-        e->setTopLine(layout->topLine);
-        e->setLeftChar(layout->leftChar);
+        e->setTopPos(layout->top);
+        e->setLeftPos(layout->left);
     }
 }
 
@@ -2624,11 +2596,13 @@ QVariant ProjectModel::data(const QModelIndex &index, int role) const
     if (!p)
         return QVariant();
     if (role == Qt::DisplayRole) {
+#ifdef ENABLE_VCS
         if (p == mProject->rootNode().get()) {
             QString branch;
             if (mIconProvider->VCSRepository()->hasRepository(branch))
                 return QString("%1 [%2]").arg(p->text,branch);
         }
+#endif
         return p->text;
     } else if (role==Qt::EditRole) {
         return p->text;
@@ -2640,9 +2614,11 @@ QVariant ProjectModel::data(const QModelIndex &index, int role) const
                 icon = mIconProvider->icon(unit->fileName());
         } else {
             if (p == mProject->rootNode().get()) {
+#ifdef ENABLE_VCS
                 QString branch;
                 if (mIconProvider->VCSRepository()->hasRepository(branch))
                     icon = pIconsManager->getIcon(IconsManager::FILESYSTEM_GIT);
+#endif
             } else {
                 switch(p->folderNodeType) {
                 case ProjectModelNodeType::DUMMY_HEADERS_FOLDER:
@@ -2751,7 +2727,7 @@ bool ProjectModel::setData(const QModelIndex &index, const QVariant &value, int 
             }
             // Target filename does not exist anymore. Do a rename
             // change name in project file first (no actual file renaming on disk)
-            //save old file, if it is openned;
+            //save old file, if it is opened;
             // remove old file from monitor list
             mProject->fileSystemWatcher()->removePath(oldName);
 

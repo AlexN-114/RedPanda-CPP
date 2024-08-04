@@ -17,7 +17,9 @@
 #ifndef ENVIRONMENTPROGRAMSWIDGET_H
 #define ENVIRONMENTPROGRAMSWIDGET_H
 
+#include "settings.h"
 #include "settingswidget.h"
+#include "utils.h"
 
 namespace Ui {
 class EnvironmentProgramsWidget;
@@ -32,6 +34,12 @@ public:
     ~EnvironmentProgramsWidget();
 
 private:
+    auto resolveExecArguments(const QString &terminalPath, const QString &argsPatter)
+        -> std::tuple<QString, QStringList, PNonExclusiveTemporaryFileOwner>;
+    void updateCommandPreview(const QString &terminalPath, const QString &argsPatter);
+    void autoDetectAndUpdateArgumentsPattern(const QString &terminalPath);
+
+private:
     Ui::EnvironmentProgramsWidget *ui;
 
     // SettingsWidget interface
@@ -41,6 +49,10 @@ protected:
     void updateIcons(const QSize &size) override;
 private slots:
     void on_btnChooseTerminal_clicked();
+    void on_txtTerminal_textChanged(const QString &terminalPath);
+    void on_txtArgsPattern_textChanged(const QString &argsPattern);
+    void on_btnAutoDetectArgsPattern_clicked();
+    void on_btnTest_clicked();
 };
 
 #endif // ENVIRONMENTPROGRAMSWIDGET_H

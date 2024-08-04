@@ -23,6 +23,7 @@ EnvironmentPerformanceWidget::EnvironmentPerformanceWidget(const QString& name, 
     ui(new Ui::EnvironmentPerformanceWidget)
 {
     ui->setupUi(this);
+    //ui->chkClearWhenEditorHidden->setVisible(false);
 }
 
 EnvironmentPerformanceWidget::~EnvironmentPerformanceWidget()
@@ -32,7 +33,7 @@ EnvironmentPerformanceWidget::~EnvironmentPerformanceWidget()
 
 void EnvironmentPerformanceWidget::doLoad()
 {
-    ui->chkClearWhenEditorHidden->setChecked(pSettings->codeCompletion().clearWhenEditorHidden());
+//    ui->chkClearWhenEditorHidden->setChecked(pSettings->codeCompletion().clearWhenEditorHidden());
 //#ifdef Q_OS_WIN
 //    MEMORYSTATUSEX statex;
 
@@ -53,15 +54,13 @@ void EnvironmentPerformanceWidget::doLoad()
 //    }
 //#endif
     ui->chkEditorsShareParser->setChecked(pSettings->codeCompletion().shareParser());
-    ui->spinMaxUndoMemory->setValue(pSettings->editor().undoMemoryUsage());
 }
 
 void EnvironmentPerformanceWidget::doSave()
 {
-    pSettings->codeCompletion().setClearWhenEditorHidden(ui->chkClearWhenEditorHidden->isChecked());
+    //pSettings->codeCompletion().setClearWhenEditorHidden(ui->chkClearWhenEditorHidden->isChecked());
     pSettings->codeCompletion().setShareParser(ui->chkEditorsShareParser->isChecked());
 
     pSettings->codeCompletion().save();
-    pSettings->editor().setUndoMemoryUsage(ui->spinMaxUndoMemory->value());
     pSettings->editor().save();
 }

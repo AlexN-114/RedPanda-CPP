@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>955</width>
+    <width>936</width>
     <height>619</height>
    </rect>
   </property>
@@ -19,7 +19,7 @@
    </iconset>
   </property>
   <property name="dockOptions">
-   <set>QMainWindow::AnimatedDocks</set>
+   <set>QMainWindow::DockOption::AnimatedDocks</set>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QHBoxLayout" name="horizontalLayout">
@@ -68,7 +68,7 @@
           </sizepolicy>
          </property>
          <property name="orientation">
-          <enum>Qt::Horizontal</enum>
+          <enum>Qt::Orientation::Horizontal</enum>
          </property>
          <property name="handleWidth">
           <number>1</number>
@@ -119,8 +119,8 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>955</width>
-     <height>24</height>
+     <width>2002</width>
+     <height>25</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -177,9 +177,9 @@
     <property name="title">
      <string>Edit</string>
     </property>
-    <widget class="QMenu" name="menuMove_Cursor">
+    <widget class="QMenu" name="menuMove_Caret">
      <property name="title">
-      <string>Move Cursor</string>
+      <string>Move Caret</string>
      </property>
      <addaction name="actionPage_Up"/>
      <addaction name="actionPage_Down"/>
@@ -206,7 +206,7 @@
     <addaction name="actionFoldAll"/>
     <addaction name="actionUnfoldAll"/>
     <addaction name="separator"/>
-    <addaction name="menuMove_Cursor"/>
+    <addaction name="menuMove_Caret"/>
     <addaction name="actionDelete_Line"/>
     <addaction name="actionDuplicate_Line"/>
     <addaction name="actionDelete_Word"/>
@@ -241,8 +241,9 @@
     <addaction name="actionGoto_block_start"/>
     <addaction name="actionGoto_block_end"/>
     <addaction name="separator"/>
-    <addaction name="actionAdd_bookmark"/>
-    <addaction name="actionRemove_Bookmark"/>
+    <addaction name="actionCode_Completion"/>
+    <addaction name="separator"/>
+    <addaction name="actionToggle_Bookmark"/>
     <addaction name="actionModify_Bookmark_Description"/>
     <addaction name="separator"/>
     <addaction name="actionTrim_trailing_spaces"/>
@@ -335,24 +336,6 @@
     <addaction name="actionToggle_Explorer_Panel"/>
     <addaction name="actionToggle_Messages_Panel"/>
    </widget>
-   <widget class="QMenu" name="menuGit">
-    <property name="title">
-     <string>Git</string>
-    </property>
-    <addaction name="actionGit_Create_Repository"/>
-    <addaction name="separator"/>
-    <addaction name="actionGit_Pull"/>
-    <addaction name="actionGit_Push"/>
-    <addaction name="actionGit_Fetch"/>
-    <addaction name="actionGit_Remotes"/>
-    <addaction name="separator"/>
-    <addaction name="actionGit_Log"/>
-    <addaction name="actionGit_Branch"/>
-    <addaction name="actionGit_Merge"/>
-    <addaction name="separator"/>
-    <addaction name="actionGit_Commit"/>
-    <addaction name="actionGit_Restore"/>
-   </widget>
    <widget class="QMenu" name="menuSelection">
     <property name="title">
      <string>Selection</string>
@@ -381,7 +364,6 @@
    <addaction name="menuRefactor"/>
    <addaction name="menuProject"/>
    <addaction name="menuExecute"/>
-   <addaction name="menuGit"/>
    <addaction name="menuTools"/>
    <addaction name="menuWindow"/>
    <addaction name="menuHelp"/>
@@ -493,10 +475,10 @@
   </widget>
   <widget class="QDockWidget" name="dockExplorer">
    <property name="features">
-    <set>QDockWidget::DockWidgetMovable</set>
+    <set>QDockWidget::DockWidgetFeature::DockWidgetMovable</set>
    </property>
    <property name="allowedAreas">
-    <set>Qt::BottomDockWidgetArea|Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea</set>
+    <set>Qt::DockWidgetArea::BottomDockWidgetArea|Qt::DockWidgetArea::LeftDockWidgetArea|Qt::DockWidgetArea::RightDockWidgetArea</set>
    </property>
    <property name="windowTitle">
     <string>Explorer</string>
@@ -512,10 +494,10 @@
      </sizepolicy>
     </property>
     <property name="tabPosition">
-     <enum>QTabWidget::West</enum>
+     <enum>QTabWidget::TabPosition::West</enum>
     </property>
     <property name="currentIndex">
-     <number>0</number>
+     <number>4</number>
     </property>
     <property name="usesScrollButtons">
      <bool>true</bool>
@@ -527,10 +509,6 @@
      <property name="autoFillBackground">
       <bool>true</bool>
      </property>
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/018-copy.png</normaloff>:/icons/images/newlook24/018-copy.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>Files</string>
      </attribute>
@@ -574,7 +552,7 @@
             <bool>true</bool>
            </property>
            <property name="insertPolicy">
-            <enum>QComboBox::InsertAtTop</enum>
+            <enum>QComboBox::InsertPolicy::InsertAtTop</enum>
            </property>
           </widget>
          </item>
@@ -584,19 +562,19 @@
       <item>
        <widget class="QTreeView" name="treeFiles">
         <property name="editTriggers">
-         <set>QAbstractItemView::EditKeyPressed|QAbstractItemView::SelectedClicked</set>
+         <set>QAbstractItemView::EditTrigger::EditKeyPressed|QAbstractItemView::EditTrigger::SelectedClicked</set>
         </property>
         <property name="dragEnabled">
          <bool>true</bool>
         </property>
         <property name="dragDropMode">
-         <enum>QAbstractItemView::DragDrop</enum>
+         <enum>QAbstractItemView::DragDropMode::DragDrop</enum>
         </property>
         <property name="defaultDropAction">
-         <enum>Qt::MoveAction</enum>
+         <enum>Qt::DropAction::MoveAction</enum>
         </property>
         <property name="selectionMode">
-         <enum>QAbstractItemView::ExtendedSelection</enum>
+         <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
         </property>
         <property name="sortingEnabled">
          <bool>false</bool>
@@ -612,10 +590,6 @@
      <property name="autoFillBackground">
       <bool>true</bool>
      </property>
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/049-newproj.png</normaloff>:/icons/images/newlook24/049-newproj.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>Project</string>
      </attribute>
@@ -635,22 +609,22 @@
       <item>
        <widget class="QTreeView" name="projectView">
         <property name="editTriggers">
-         <set>QAbstractItemView::EditKeyPressed|QAbstractItemView::SelectedClicked</set>
+         <set>QAbstractItemView::EditTrigger::EditKeyPressed|QAbstractItemView::EditTrigger::SelectedClicked</set>
         </property>
         <property name="dragEnabled">
          <bool>true</bool>
         </property>
         <property name="dragDropMode">
-         <enum>QAbstractItemView::InternalMove</enum>
+         <enum>QAbstractItemView::DragDropMode::InternalMove</enum>
         </property>
         <property name="defaultDropAction">
-         <enum>Qt::MoveAction</enum>
+         <enum>Qt::DropAction::MoveAction</enum>
         </property>
         <property name="selectionMode">
-         <enum>QAbstractItemView::ExtendedSelection</enum>
+         <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
         </property>
         <property name="selectionBehavior">
-         <enum>QAbstractItemView::SelectRows</enum>
+         <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
         </property>
         <property name="autoExpandDelay">
          <number>500</number>
@@ -666,10 +640,6 @@
      <property name="autoFillBackground">
       <bool>true</bool>
      </property>
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/088-watch.png</normaloff>:/icons/images/newlook24/088-watch.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>Watch</string>
      </attribute>
@@ -689,13 +659,13 @@
       <item>
        <widget class="QTreeView" name="watchView">
         <property name="editTriggers">
-         <set>QAbstractItemView::DoubleClicked</set>
+         <set>QAbstractItemView::EditTrigger::DoubleClicked</set>
         </property>
         <property name="selectionMode">
-         <enum>QAbstractItemView::ExtendedSelection</enum>
+         <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
         </property>
         <property name="textElideMode">
-         <enum>Qt::ElideNone</enum>
+         <enum>Qt::TextElideMode::ElideNone</enum>
         </property>
         <property name="wordWrap">
          <bool>false</bool>
@@ -711,10 +681,6 @@
      <property name="autoFillBackground">
       <bool>true</bool>
      </property>
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/087-update.png</normaloff>:/icons/images/newlook24/087-update.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>Structure</string>
      </attribute>
@@ -737,7 +703,7 @@
       <item>
        <widget class="QTreeView" name="classBrowser">
         <property name="horizontalScrollBarPolicy">
-         <enum>Qt::ScrollBarAlwaysOn</enum>
+         <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOn</enum>
         </property>
         <property name="rootIsDecorated">
          <bool>true</bool>
@@ -753,10 +719,6 @@
      <property name="autoFillBackground">
       <bool>true</bool>
      </property>
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/014-compopt.png</normaloff>:/icons/images/newlook24/014-compopt.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>Problem Set</string>
      </attribute>
@@ -779,10 +741,10 @@
       <item>
        <widget class="QLabel" name="lblProblemSet">
         <property name="frameShape">
-         <enum>QFrame::Panel</enum>
+         <enum>QFrame::Shape::Panel</enum>
         </property>
         <property name="frameShadow">
-         <enum>QFrame::Plain</enum>
+         <enum>QFrame::Shadow::Plain</enum>
         </property>
         <property name="text">
          <string>Problem Set</string>
@@ -816,8 +778,9 @@
             <string>New Problem Set</string>
            </property>
            <property name="icon">
-            <iconset resource="icons.qrc">
-             <normaloff>:/icons/images/newlook24/050-newsrc.png</normaloff>:/icons/images/newlook24/050-newsrc.png</iconset>
+            <iconset>
+             <normalon>:/resources/iconsets/newlook/actions/08Problem-01Problem.svg</normalon>
+            </iconset>
            </property>
           </widget>
          </item>
@@ -830,8 +793,9 @@
             <string>Add Problem</string>
            </property>
            <property name="icon">
-            <iconset resource="icons.qrc">
-             <normaloff>:/icons/images/newlook24/002-add.png</normaloff>:/icons/images/newlook24/002-add.png</iconset>
+            <iconset>
+             <normalon>:/resources/iconsets/newlook/actions/00Misc-03Add.svg</normalon>
+            </iconset>
            </property>
           </widget>
          </item>
@@ -844,8 +808,9 @@
             <string>Remove Problem</string>
            </property>
            <property name="icon">
-            <iconset resource="icons.qrc">
-             <normaloff>:/icons/images/newlook24/008-close.png</normaloff>:/icons/images/newlook24/008-close.png</iconset>
+            <iconset>
+             <normalon>:/resources/iconsets/newlook/actions/00Misc-04Remove.svg</normalon>
+            </iconset>
            </property>
           </widget>
          </item>
@@ -858,8 +823,9 @@
             <string>Save Problem Set</string>
            </property>
            <property name="icon">
-            <iconset resource="icons.qrc">
-             <normaloff>:/icons/images/newlook24/072-saveas.png</normaloff>:/icons/images/newlook24/072-saveas.png</iconset>
+            <iconset>
+             <normalon>:/resources/iconsets/newlook/actions/01File-04SaveAs.svg</normalon>
+            </iconset>
            </property>
           </widget>
          </item>
@@ -872,8 +838,9 @@
             <string>Load Problem Set</string>
            </property>
            <property name="icon">
-            <iconset resource="icons.qrc">
-             <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
+            <iconset>
+             <normalon>:/resources/iconsets/newlook/actions/06View-03Files.svg</normalon>
+            </iconset>
            </property>
           </widget>
          </item>
@@ -883,8 +850,9 @@
             <string>Import FPS Problem Set</string>
            </property>
            <property name="icon">
-            <iconset resource="icons.qrc">
-             <normaloff>:/icons/images/newlook24/058-prev.png</normaloff>:/icons/images/newlook24/058-prev.png</iconset>
+            <iconset>
+             <normalon>:/resources/iconsets/newlook/actions/00Misc-01Back.svg</normalon>
+            </iconset>
            </property>
           </widget>
          </item>
@@ -894,15 +862,16 @@
             <string>Export FPS Problem Set</string>
            </property>
            <property name="icon">
-            <iconset resource="icons.qrc">
-             <normaloff>:/icons/images/newlook24/052-next.png</normaloff>:/icons/images/newlook24/052-next.png</iconset>
+            <iconset>
+             <normalon>:/resources/iconsets/newlook/actions/00Misc-02Forward.svg</normalon>
+            </iconset>
            </property>
           </widget>
          </item>
          <item>
           <spacer name="horizontalSpacer_3">
            <property name="orientation">
-            <enum>Qt::Horizontal</enum>
+            <enum>Qt::Orientation::Horizontal</enum>
            </property>
            <property name="sizeHint" stdset="0">
             <size>
@@ -921,19 +890,19 @@
          <bool>true</bool>
         </property>
         <property name="dragDropMode">
-         <enum>QAbstractItemView::InternalMove</enum>
+         <enum>QAbstractItemView::DragDropMode::InternalMove</enum>
         </property>
         <property name="defaultDropAction">
-         <enum>Qt::MoveAction</enum>
+         <enum>Qt::DropAction::MoveAction</enum>
         </property>
         <property name="alternatingRowColors">
          <bool>true</bool>
         </property>
         <property name="selectionMode">
-         <enum>QAbstractItemView::ExtendedSelection</enum>
+         <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
         </property>
         <property name="selectionBehavior">
-         <enum>QAbstractItemView::SelectRows</enum>
+         <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
         </property>
        </widget>
       </item>
@@ -943,10 +912,10 @@
   </widget>
   <widget class="QDockWidget" name="dockMessages">
    <property name="features">
-    <set>QDockWidget::DockWidgetMovable|QDockWidget::DockWidgetVerticalTitleBar</set>
+    <set>QDockWidget::DockWidgetFeature::DockWidgetMovable|QDockWidget::DockWidgetFeature::DockWidgetVerticalTitleBar</set>
    </property>
    <property name="allowedAreas">
-    <set>Qt::BottomDockWidgetArea|Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea</set>
+    <set>Qt::DockWidgetArea::BottomDockWidgetArea|Qt::DockWidgetArea::LeftDockWidgetArea|Qt::DockWidgetArea::RightDockWidgetArea</set>
    </property>
    <property name="windowTitle">
     <string>Messages</string>
@@ -962,10 +931,10 @@
      </sizepolicy>
     </property>
     <property name="tabPosition">
-     <enum>QTabWidget::South</enum>
+     <enum>QTabWidget::TabPosition::South</enum>
     </property>
     <property name="currentIndex">
-     <number>6</number>
+     <number>2</number>
     </property>
     <property name="iconSize">
      <size>
@@ -974,11 +943,6 @@
      </size>
     </property>
     <widget class="QWidget" name="tabIssues">
-     <attribute name="icon">
-      <iconset>
-       <normalon>:/icons/images/newlook24/013-compile.png</normalon>
-      </iconset>
-     </attribute>
      <attribute name="title">
       <string>Issues</string>
      </attribute>
@@ -1003,7 +967,7 @@
          </font>
         </property>
         <property name="editTriggers">
-         <set>QAbstractItemView::NoEditTriggers</set>
+         <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
         </property>
         <property name="tabKeyNavigation">
          <bool>false</bool>
@@ -1015,10 +979,10 @@
          <bool>true</bool>
         </property>
         <property name="selectionMode">
-         <enum>QAbstractItemView::SingleSelection</enum>
+         <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
         </property>
         <property name="selectionBehavior">
-         <enum>QAbstractItemView::SelectRows</enum>
+         <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
         </property>
         <attribute name="horizontalHeaderStretchLastSection">
          <bool>true</bool>
@@ -1028,11 +992,6 @@
      </layout>
     </widget>
     <widget class="QWidget" name="tabToolsOutput">
-     <attribute name="icon">
-      <iconset>
-       <normalon>:/icons/images/newlook24/015-compres.png</normalon>
-      </iconset>
-     </attribute>
      <attribute name="title">
       <string>Tools Output</string>
      </attribute>
@@ -1055,7 +1014,7 @@
          <bool>false</bool>
         </property>
         <property name="lineWrapMode">
-         <enum>QPlainTextEdit::NoWrap</enum>
+         <enum>QPlainTextEdit::LineWrapMode::WidgetWidth</enum>
         </property>
         <property name="readOnly">
          <bool>true</bool>
@@ -1068,11 +1027,6 @@
      </layout>
     </widget>
     <widget class="QWidget" name="tabDebug">
-     <attribute name="icon">
-      <iconset>
-       <normalon>:/icons/images/newlook24/020-debug.png</normalon>
-      </iconset>
-     </attribute>
      <attribute name="title">
       <string>Debug</string>
      </attribute>
@@ -1095,17 +1049,17 @@
       <item>
        <widget class="QSplitter" name="splitterDebug">
         <property name="orientation">
-         <enum>Qt::Horizontal</enum>
+         <enum>Qt::Orientation::Horizontal</enum>
         </property>
         <property name="handleWidth">
          <number>3</number>
         </property>
         <widget class="QFrame" name="frmEvaluate">
          <property name="frameShape">
-          <enum>QFrame::StyledPanel</enum>
+          <enum>QFrame::Shape::StyledPanel</enum>
          </property>
          <property name="frameShadow">
-          <enum>QFrame::Raised</enum>
+          <enum>QFrame::Shadow::Raised</enum>
          </property>
          <layout class="QGridLayout" name="gridLayout_2">
           <property name="leftMargin">
@@ -1139,7 +1093,7 @@
              <bool>true</bool>
             </property>
             <property name="insertPolicy">
-             <enum>QComboBox::InsertAtTop</enum>
+             <enum>QComboBox::InsertPolicy::InsertAtTop</enum>
             </property>
            </widget>
           </item>
@@ -1157,10 +1111,10 @@
         </widget>
         <widget class="QTabWidget" name="debugViews">
          <property name="tabPosition">
-          <enum>QTabWidget::North</enum>
+          <enum>QTabWidget::TabPosition::North</enum>
          </property>
          <property name="currentIndex">
-          <number>2</number>
+          <number>3</number>
          </property>
          <widget class="QWidget" name="tabDebugConsole">
           <attribute name="title">
@@ -1182,10 +1136,10 @@
            <item>
             <widget class="QConsole" name="debugConsole">
              <property name="frameShape">
-              <enum>QFrame::StyledPanel</enum>
+              <enum>QFrame::Shape::StyledPanel</enum>
              </property>
              <property name="frameShadow">
-              <enum>QFrame::Raised</enum>
+              <enum>QFrame::Shadow::Raised</enum>
              </property>
             </widget>
            </item>
@@ -1214,13 +1168,13 @@
               <bool>true</bool>
              </property>
              <property name="selectionMode">
-              <enum>QAbstractItemView::SingleSelection</enum>
+              <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
              </property>
              <property name="selectionBehavior">
-              <enum>QAbstractItemView::SelectRows</enum>
+              <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
              </property>
              <property name="textElideMode">
-              <enum>Qt::ElideNone</enum>
+              <enum>Qt::TextElideMode::ElideNone</enum>
              </property>
              <attribute name="horizontalHeaderStretchLastSection">
               <bool>true</bool>
@@ -1252,13 +1206,13 @@
               <bool>true</bool>
              </property>
              <property name="selectionMode">
-              <enum>QAbstractItemView::SingleSelection</enum>
+              <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
              </property>
              <property name="selectionBehavior">
-              <enum>QAbstractItemView::SelectRows</enum>
+              <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
              </property>
              <property name="textElideMode">
-              <enum>Qt::ElideNone</enum>
+              <enum>Qt::TextElideMode::ElideNone</enum>
              </property>
              <attribute name="horizontalHeaderStretchLastSection">
               <bool>true</bool>
@@ -1313,6 +1267,9 @@
              <attribute name="horizontalHeaderVisible">
               <bool>false</bool>
              </attribute>
+             <attribute name="horizontalHeaderMinimumSectionSize">
+              <number>20</number>
+             </attribute>
             </widget>
            </item>
            <item row="0" column="1">
@@ -1327,7 +1284,7 @@
               <bool>true</bool>
              </property>
              <property name="insertPolicy">
-              <enum>QComboBox::InsertAtTop</enum>
+              <enum>QComboBox::InsertPolicy::InsertAtTop</enum>
              </property>
             </widget>
            </item>
@@ -1339,11 +1296,6 @@
      </layout>
     </widget>
     <widget class="QWidget" name="tabSearch">
-     <attribute name="icon">
-      <iconset>
-       <normalon>:/icons/images/newlook24/074-search.png</normalon>
-      </iconset>
-     </attribute>
      <attribute name="title">
       <string>Search</string>
      </attribute>
@@ -1403,7 +1355,7 @@
             </size>
            </property>
            <property name="sizeAdjustPolicy">
-            <enum>QComboBox::AdjustToContents</enum>
+            <enum>QComboBox::SizeAdjustPolicy::AdjustToContents</enum>
            </property>
           </widget>
          </item>
@@ -1426,7 +1378,7 @@
          <item>
           <spacer name="horizontalSpacer">
            <property name="orientation">
-            <enum>Qt::Horizontal</enum>
+            <enum>Qt::Orientation::Horizontal</enum>
            </property>
            <property name="sizeHint" stdset="0">
             <size>
@@ -1473,10 +1425,10 @@
             <bool>true</bool>
            </property>
            <property name="insertPolicy">
-            <enum>QComboBox::InsertAtTop</enum>
+            <enum>QComboBox::InsertPolicy::InsertAtTop</enum>
            </property>
            <property name="sizeAdjustPolicy">
-            <enum>QComboBox::AdjustToContents</enum>
+            <enum>QComboBox::SizeAdjustPolicy::AdjustToContents</enum>
            </property>
           </widget>
          </item>
@@ -1504,7 +1456,7 @@
          <item>
           <spacer name="horizontalSpacer_2">
            <property name="orientation">
-            <enum>Qt::Horizontal</enum>
+            <enum>Qt::Orientation::Horizontal</enum>
            </property>
            <property name="sizeHint" stdset="0">
             <size>
@@ -1527,10 +1479,6 @@
      </layout>
     </widget>
     <widget class="QWidget" name="tabTODO">
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/047-makefl.png</normaloff>:/icons/images/newlook24/047-makefl.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>TODO</string>
      </attribute>
@@ -1557,10 +1505,6 @@
      </layout>
     </widget>
     <widget class="QWidget" name="tabBookmark">
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/039-gobook.png</normaloff>:/icons/images/newlook24/039-gobook.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>Bookmark</string>
      </attribute>
@@ -1583,10 +1527,10 @@
          <bool>true</bool>
         </property>
         <property name="selectionMode">
-         <enum>QAbstractItemView::SingleSelection</enum>
+         <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
         </property>
         <property name="selectionBehavior">
-         <enum>QAbstractItemView::SelectRows</enum>
+         <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
         </property>
         <property name="sortingEnabled">
          <bool>true</bool>
@@ -1599,10 +1543,6 @@
      </layout>
     </widget>
     <widget class="QWidget" name="tabProblem">
-     <attribute name="icon">
-      <iconset resource="icons.qrc">
-       <normaloff>:/icons/images/newlook24/015-compres.png</normaloff>:/icons/images/newlook24/015-compres.png</iconset>
-     </attribute>
      <attribute name="title">
       <string>Problem</string>
      </attribute>
@@ -1622,7 +1562,7 @@
       <item>
        <widget class="QSplitter" name="splitterProblem">
         <property name="orientation">
-         <enum>Qt::Horizontal</enum>
+         <enum>Qt::Orientation::Horizontal</enum>
         </property>
         <widget class="QWidget" name="panelProblemCaseInfo" native="true">
          <layout class="QVBoxLayout" name="verticalLayout_7">
@@ -1644,7 +1584,7 @@
           <item>
            <widget class="QLabel" name="lblProblem">
             <property name="frameShape">
-             <enum>QFrame::Box</enum>
+             <enum>QFrame::Shape::Box</enum>
             </property>
             <property name="text">
              <string>Problem</string>
@@ -1705,8 +1645,8 @@
                 <string>Add Probem Case</string>
                </property>
                <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/002-add.png</normaloff>:/icons/images/newlook24/002-add.png</iconset>
+                <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+                 <normaloff>:/resources/iconsets/newlook/actions/00Misc-03Add.svg</normaloff>:/resources/iconsets/newlook/actions/00Misc-03Add.svg</iconset>
                </property>
               </widget>
              </item>
@@ -1719,8 +1659,8 @@
                 <string>Remove Problem Case</string>
                </property>
                <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/008-close.png</normaloff>:/icons/images/newlook24/008-close.png</iconset>
+                <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+                 <normaloff>:/resources/iconsets/newlook/actions/00Misc-04Remove.svg</normaloff>:/resources/iconsets/newlook/actions/00Misc-04Remove.svg</iconset>
                </property>
               </widget>
              </item>
@@ -1733,15 +1673,15 @@
                 <string>Open Anwser Source File</string>
                </property>
                <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/091-openproblemanswer.png</normaloff>:/icons/images/newlook24/091-openproblemanswer.png</iconset>
+                <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+                 <normaloff>:/resources/iconsets/newlook/actions/08Problem-04EditSource.svg</normaloff>:/resources/iconsets/newlook/actions/08Problem-04EditSource.svg</iconset>
                </property>
               </widget>
              </item>
              <item>
               <widget class="Line" name="line">
                <property name="orientation">
-                <enum>Qt::Vertical</enum>
+                <enum>Qt::Orientation::Vertical</enum>
                </property>
               </widget>
              </item>
@@ -1754,8 +1694,8 @@
                 <string>Run All Cases</string>
                </property>
                <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/092-runallproblemcases.png</normaloff>:/icons/images/newlook24/092-runallproblemcases.png</iconset>
+                <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+                 <normaloff>:/resources/iconsets/newlook/actions/08Problem-05RunCases.svg</normaloff>:/resources/iconsets/newlook/actions/08Problem-05RunCases.svg</iconset>
                </property>
               </widget>
              </item>
@@ -1765,15 +1705,15 @@
                 <string>Problem Cases Validation Options</string>
                </property>
                <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/083-toolbar.png</normaloff>:/icons/images/newlook24/083-toolbar.png</iconset>
+                <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+                 <normaloff>:/resources/iconsets/newlook/actions/00Misc-05Gear.svg</normaloff>:/resources/iconsets/newlook/actions/00Misc-05Gear.svg</iconset>
                </property>
               </widget>
              </item>
              <item>
               <spacer name="horizontalSpacer_4">
                <property name="orientation">
-                <enum>Qt::Horizontal</enum>
+                <enum>Qt::Orientation::Horizontal</enum>
                </property>
                <property name="sizeHint" stdset="0">
                 <size>
@@ -1814,19 +1754,19 @@
              <bool>false</bool>
             </property>
             <property name="dragDropMode">
-             <enum>QAbstractItemView::InternalMove</enum>
+             <enum>QAbstractItemView::DragDropMode::InternalMove</enum>
             </property>
             <property name="defaultDropAction">
-             <enum>Qt::MoveAction</enum>
+             <enum>Qt::DropAction::MoveAction</enum>
             </property>
             <property name="alternatingRowColors">
              <bool>true</bool>
             </property>
             <property name="selectionMode">
-             <enum>QAbstractItemView::SingleSelection</enum>
+             <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
             </property>
             <property name="selectionBehavior">
-             <enum>QAbstractItemView::SelectRows</enum>
+             <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
             </property>
             <attribute name="horizontalHeaderDefaultSectionSize">
              <number>200</number>
@@ -1886,8 +1826,8 @@
                 <string>Choose Input File</string>
                </property>
                <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
+                <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+                 <normaloff>:/resources/iconsets/newlook/actions/00Misc-07Folder.svg</normaloff>:/resources/iconsets/newlook/actions/00Misc-07Folder.svg</iconset>
                </property>
               </widget>
              </item>
@@ -1895,10 +1835,6 @@
               <widget class="QToolButton" name="btnProblemCaseClearInputFileName">
                <property name="text">
                 <string>Clear</string>
-               </property>
-               <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/008-close.png</normaloff>:/icons/images/newlook24/008-close.png</iconset>
                </property>
               </widget>
              </item>
@@ -1928,7 +1864,7 @@
              </sizepolicy>
             </property>
             <property name="lineWrapMode">
-             <enum>QPlainTextEdit::NoWrap</enum>
+             <enum>QPlainTextEdit::LineWrapMode::NoWrap</enum>
             </property>
            </widget>
           </item>
@@ -1941,7 +1877,7 @@
              </sizepolicy>
             </property>
             <property name="lineWrapMode">
-             <enum>QPlainTextEdit::NoWrap</enum>
+             <enum>QPlainTextEdit::LineWrapMode::NoWrap</enum>
             </property>
            </widget>
           </item>
@@ -1954,7 +1890,7 @@
              </sizepolicy>
             </property>
             <property name="lineWrapMode">
-             <enum>QPlainTextEdit::NoWrap</enum>
+             <enum>QPlainTextEdit::LineWrapMode::NoWrap</enum>
             </property>
             <property name="readOnly">
              <bool>true</bool>
@@ -2001,10 +1937,6 @@
                <property name="text">
                 <string>Clear</string>
                </property>
-               <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/008-close.png</normaloff>:/icons/images/newlook24/008-close.png</iconset>
-               </property>
               </widget>
              </item>
              <item>
@@ -2013,8 +1945,8 @@
                 <string>Choose Expected Output File</string>
                </property>
                <property name="icon">
-                <iconset resource="icons.qrc">
-                 <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
+                <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+                 <normaloff>:/resources/iconsets/newlook/actions/00Misc-07Folder.svg</normaloff>:/resources/iconsets/newlook/actions/00Misc-07Folder.svg</iconset>
                </property>
               </widget>
              </item>
@@ -2046,7 +1978,7 @@
              <item>
               <spacer name="horizontalSpacer_5">
                <property name="orientation">
-                <enum>Qt::Horizontal</enum>
+                <enum>Qt::Orientation::Horizontal</enum>
                </property>
                <property name="sizeHint" stdset="0">
                 <size>
@@ -2057,11 +1989,7 @@
               </spacer>
              </item>
              <item>
-              <widget class="QCheckBox" name="chkIgnoreSpaces">
-               <property name="text">
-                <string>Ignore Spaces</string>
-               </property>
-              </widget>
+              <widget class="QComboBox" name="cbProblemCaseValidateType"/>
              </item>
             </layout>
            </widget>
@@ -2090,9 +2018,8 @@
   </widget>
   <action name="actionNew">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/050-newsrc.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/01File-01New.svg</normaloff>:/resources/iconsets/newlook/actions/01File-01New.svg</iconset>
    </property>
    <property name="text">
     <string>New C/C++ File</string>
@@ -2106,9 +2033,8 @@
   </action>
   <action name="actionOpen">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/053-open.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/01File-02Open.svg</normaloff>:/resources/iconsets/newlook/actions/01File-02Open.svg</iconset>
    </property>
    <property name="text">
     <string>Open...</string>
@@ -2119,9 +2045,8 @@
   </action>
   <action name="actionSave">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/070-save.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/01File-03Save.svg</normaloff>:/resources/iconsets/newlook/actions/01File-03Save.svg</iconset>
    </property>
    <property name="text">
     <string>Save</string>
@@ -2132,9 +2057,8 @@
   </action>
   <action name="actionSaveAs">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/072-saveas.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/01File-04SaveAs.svg</normaloff>:/resources/iconsets/newlook/actions/01File-04SaveAs.svg</iconset>
    </property>
    <property name="text">
     <string>Save As...</string>
@@ -2148,9 +2072,8 @@
   </action>
   <action name="actionSaveAll">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/071-saveall.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/01File-05SaveAll.svg</normaloff>:/resources/iconsets/newlook/actions/01File-05SaveAll.svg</iconset>
    </property>
    <property name="text">
     <string>Save All</string>
@@ -2161,8 +2084,8 @@
   </action>
   <action name="actionOptions">
    <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/061-rebuild.png</normaloff>:/icons/images/newlook24/061-rebuild.png</iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/00Misc-05Gear.svg</normaloff>:/resources/iconsets/newlook/actions/00Misc-05Gear.svg</iconset>
    </property>
    <property name="text">
     <string>Options</string>
@@ -2170,9 +2093,8 @@
   </action>
   <action name="actionCompile">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/013-compile.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-01Compile.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-01Compile.svg</iconset>
    </property>
    <property name="text">
     <string>Compile</string>
@@ -2186,9 +2108,8 @@
   </action>
   <action name="actionRun">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/069-run.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-03Run.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-03Run.svg</iconset>
    </property>
    <property name="text">
     <string>Run</string>
@@ -2202,9 +2123,8 @@
   </action>
   <action name="actionUndo">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/086-undo.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/03Edit-01Undo.svg</normaloff>:/resources/iconsets/newlook/actions/03Edit-01Undo.svg</iconset>
    </property>
    <property name="text">
     <string>Undo</string>
@@ -2215,9 +2135,8 @@
   </action>
   <action name="actionRedo">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/062-redo.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/03Edit-02Redo.svg</normaloff>:/resources/iconsets/newlook/actions/03Edit-02Redo.svg</iconset>
    </property>
    <property name="text">
     <string>Redo</string>
@@ -2228,9 +2147,8 @@
   </action>
   <action name="actionCut">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/019-cut.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/03Edit-03Cut.svg</normaloff>:/resources/iconsets/newlook/actions/03Edit-03Cut.svg</iconset>
    </property>
    <property name="text">
     <string>Cut</string>
@@ -2241,9 +2159,8 @@
   </action>
   <action name="actionCopy">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/018-copy.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/03Edit-04Copy.svg</normaloff>:/resources/iconsets/newlook/actions/03Edit-04Copy.svg</iconset>
    </property>
    <property name="text">
     <string>Copy</string>
@@ -2254,9 +2171,8 @@
   </action>
   <action name="actionPaste">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/057-paste.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/03Edit-05Paste.svg</normaloff>:/resources/iconsets/newlook/actions/03Edit-05Paste.svg</iconset>
    </property>
    <property name="text">
     <string>Paste</string>
@@ -2275,9 +2191,8 @@
   </action>
   <action name="actionIndent">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/031-Edit-Indent.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/03Edit-06Indent.svg</normaloff>:/resources/iconsets/newlook/actions/03Edit-06Indent.svg</iconset>
    </property>
    <property name="text">
     <string>Indent</string>
@@ -2288,9 +2203,8 @@
   </action>
   <action name="actionUnIndent">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/032-Edit-Unindent.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/03Edit-07Unindent.svg</normaloff>:/resources/iconsets/newlook/actions/03Edit-07Unindent.svg</iconset>
    </property>
    <property name="text">
     <string>UnIndent</string>
@@ -2347,9 +2261,8 @@
   </action>
   <action name="actionRebuild">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/061-rebuild.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-04Rebuild.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-04Rebuild.svg</iconset>
    </property>
    <property name="text">
     <string>Rebuild All</string>
@@ -2363,9 +2276,8 @@
   </action>
   <action name="actionStop_Execution">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/008-close.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-11Stop.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-11Stop.svg</iconset>
    </property>
    <property name="text">
     <string>Stop Execution</string>
@@ -2376,8 +2288,8 @@
   </action>
   <action name="actionDebug">
    <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/022-debug-new-tm.png</normaloff>:/icons/images/newlook24/022-debug-new-tm.png</iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-06Debug.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-06Debug.svg</iconset>
    </property>
    <property name="text">
     <string>Debug</string>
@@ -2391,9 +2303,8 @@
   </action>
   <action name="actionStep_Over">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/028-Debug-StepOver.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-07StepOver.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-07StepOver.svg</iconset>
    </property>
    <property name="text">
     <string>Step Over</string>
@@ -2404,9 +2315,8 @@
   </action>
   <action name="actionStep_Into">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/024-Debug-StepInto.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-08StepInto.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-08StepInto.svg</iconset>
    </property>
    <property name="text">
     <string>Step Into</string>
@@ -2417,9 +2327,8 @@
   </action>
   <action name="actionStep_Out">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/026-Debug-StepOut.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-08StepOut.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-08StepOut.svg</iconset>
    </property>
    <property name="text">
     <string>Step Out</string>
@@ -2430,8 +2339,8 @@
   </action>
   <action name="actionRun_To_Cursor">
    <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/052-next.png</normaloff>:/icons/images/newlook24/052-next.png</iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-09RunToCursor.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-09RunToCursor.svg</iconset>
    </property>
    <property name="text">
     <string>Run To Cursor</string>
@@ -2442,9 +2351,8 @@
   </action>
   <action name="actionContinue">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/021-Debug-Continue.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-10Continue.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-10Continue.svg</iconset>
    </property>
    <property name="text">
     <string>Continue</string>
@@ -2455,9 +2363,8 @@
   </action>
   <action name="actionAdd_Watch">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/088-watch.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-12AddWatch.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-12AddWatch.svg</iconset>
    </property>
    <property name="text">
     <string>Add Watch...</string>
@@ -2474,11 +2381,6 @@
    </property>
   </action>
   <action name="actionFind">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/079-srchrep.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Find...</string>
    </property>
@@ -2495,11 +2397,6 @@
    </property>
   </action>
   <action name="actionReplace">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/066-replace.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Replace...</string>
    </property>
@@ -2524,6 +2421,10 @@
    </property>
   </action>
   <action name="actionRemove_Watch">
+   <property name="icon">
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-13RemoveWatch.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-13RemoveWatch.svg</iconset>
+   </property>
    <property name="text">
     <string>Remove Watch</string>
    </property>
@@ -2540,9 +2441,8 @@
   </action>
   <action name="actionReformat_Code">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/063-reformat.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/04Code-05Reformat.svg</normaloff>:/resources/iconsets/newlook/actions/04Code-05Reformat.svg</iconset>
    </property>
    <property name="text">
     <string>Reformat Code</string>
@@ -2553,9 +2453,8 @@
   </action>
   <action name="actionBack">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/006-Back.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/04Code-01Back.svg</normaloff>:/resources/iconsets/newlook/actions/04Code-01Back.svg</iconset>
    </property>
    <property name="text">
     <string>Go back</string>
@@ -2566,9 +2465,8 @@
   </action>
   <action name="actionForward">
    <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/038-Forward.png</normalon>
-    </iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/04Code-02Forward.svg</normaloff>:/resources/iconsets/newlook/actions/04Code-02Forward.svg</iconset>
    </property>
    <property name="text">
     <string>Forward</string>
@@ -2578,11 +2476,6 @@
    </property>
   </action>
   <action name="actionClose">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/010-closefl.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Close</string>
    </property>
@@ -2591,11 +2484,6 @@
    </property>
   </action>
   <action name="actionClose_All">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/009-closeall.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Close All</string>
    </property>
@@ -2604,11 +2492,6 @@
    </property>
   </action>
   <action name="actionMaximize_Editor">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/030-dos.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Maximize Editor</string>
    </property>
@@ -2617,11 +2500,6 @@
    </property>
   </action>
   <action name="actionNext_Editor">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/038-Forward.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Next</string>
    </property>
@@ -2630,11 +2508,6 @@
    </property>
   </action>
   <action name="actionPrevious_Editor">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/006-Back.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Previous</string>
    </property>
@@ -2670,7 +2543,7 @@
     <string>Goto Declaration</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+Shift+G</string>
+    <string>Ctrl+J</string>
    </property>
   </action>
   <action name="actionGoto_Definition">
@@ -2678,7 +2551,7 @@
     <string>Goto Definition</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+G</string>
+    <string>Ctrl+Shift+J</string>
    </property>
   </action>
   <action name="actionFind_references">
@@ -2687,27 +2560,14 @@
    </property>
   </action>
   <action name="actionOpen_Containing_Folder">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/090-explorer.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Open containing folder</string>
    </property>
-   <property name="shortcut">
-    <string>Ctrl+B</string>
-   </property>
    <property name="shortcutContext">
-    <enum>Qt::ApplicationShortcut</enum>
+    <enum>Qt::ShortcutContext::ApplicationShortcut</enum>
    </property>
   </action>
   <action name="actionOpen_Terminal">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/030-dos.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Open a terminal here</string>
    </property>
@@ -2718,40 +2578,21 @@
    </property>
   </action>
   <action name="actionClose_Project">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/008-close.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Close Project</string>
    </property>
   </action>
   <action name="actionProject_options">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/060-projopt.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>Project options</string>
    </property>
   </action>
   <action name="actionNew_Project">
-   <property name="icon">
-    <iconset>
-     <normalon>:/icons/images/newlook24/049-newproj.png</normalon>
-    </iconset>
-   </property>
    <property name="text">
     <string>New Project...</string>
    </property>
   </action>
   <action name="actionProject_New_File">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/050-newsrc.png</normaloff>:/icons/images/newlook24/050-newsrc.png</iconset>
-   </property>
    <property name="text">
     <string>New Project File</string>
    </property>
@@ -2760,19 +2601,11 @@
    </property>
   </action>
   <action name="actionAdd_to_project">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/004-addsrc.png</normaloff>:/icons/images/newlook24/004-addsrc.png</iconset>
-   </property>
    <property name="text">
     <string>Add to project...</string>
    </property>
   </action>
   <action name="actionRemove_from_project">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/064-remsrc.png</normaloff>:/icons/images/newlook24/064-remsrc.png</iconset>
-   </property>
    <property name="text">
     <string>Remove from project</string>
    </property>
@@ -2783,37 +2616,21 @@
    </property>
   </action>
   <action name="actionMakeClean">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/011-clrhist.png</normaloff>:/icons/images/newlook24/011-clrhist.png</iconset>
-   </property>
    <property name="text">
     <string>Clean</string>
    </property>
   </action>
   <action name="actionProject_Open_Folder_In_Explorer">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/090-explorer.png</normaloff>:/icons/images/newlook24/090-explorer.png</iconset>
-   </property>
    <property name="text">
     <string>Open Folder in Explorer</string>
    </property>
   </action>
   <action name="actionProject_Open_In_Terminal">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/030-dos.png</normaloff>:/icons/images/newlook24/030-dos.png</iconset>
-   </property>
    <property name="text">
     <string>Open In Terminal</string>
    </property>
   </action>
   <action name="actionAbout">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/001-about.png</normaloff>:/icons/images/newlook24/001-about.png</iconset>
-   </property>
    <property name="text">
     <string>About</string>
    </property>
@@ -2827,10 +2644,6 @@
    </property>
   </action>
   <action name="actionPrint">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/055-package.png</normaloff>:/icons/images/newlook24/055-package.png</iconset>
-   </property>
    <property name="text">
     <string>Print...</string>
    </property>
@@ -2856,7 +2669,7 @@
     <string>Ctrl+M</string>
    </property>
    <property name="shortcutContext">
-    <enum>Qt::ApplicationShortcut</enum>
+    <enum>Qt::ShortcutContext::ApplicationShortcut</enum>
    </property>
   </action>
   <action name="actionC_C_Reference">
@@ -2872,43 +2685,17 @@
     <string>EGE Manual</string>
    </property>
   </action>
-  <action name="actionAdd_bookmark">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/003-addbook.png</normaloff>:/icons/images/newlook24/003-addbook.png</iconset>
-   </property>
-   <property name="text">
-    <string>Add Bookmark</string>
-   </property>
-  </action>
-  <action name="actionRemove_Bookmark">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/064-remsrc.png</normaloff>:/icons/images/newlook24/064-remsrc.png</iconset>
-   </property>
-   <property name="text">
-    <string>Remove Bookmark</string>
-   </property>
-  </action>
   <action name="actionModify_Bookmark_Description">
    <property name="text">
     <string>Modify Bookmark Description</string>
    </property>
   </action>
   <action name="actionLocate_in_Files_View">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/046-Locate.png</normaloff>:/icons/images/newlook24/046-Locate.png</iconset>
-   </property>
    <property name="text">
     <string>Locate in Files View</string>
    </property>
   </action>
   <action name="actionOpen_Folder">
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
-   </property>
    <property name="text">
     <string>Choose Working Folder</string>
    </property>
@@ -2918,8 +2705,8 @@
   </action>
   <action name="actionRun_Parameters">
    <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/014-compopt.png</normaloff>:/icons/images/newlook24/014-compopt.png</iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-05Options.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-05Options.svg</iconset>
    </property>
    <property name="text">
     <string>Running Parameters...</string>
@@ -3084,8 +2871,8 @@
   </action>
   <action name="actionInterrupt">
    <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/093-pause.png</normaloff>:/icons/images/newlook24/093-pause.png</iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-16Interrupt.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-16Interrupt.svg</iconset>
    </property>
    <property name="text">
     <string>Interrupt</string>
@@ -3123,86 +2910,14 @@
     <string>New Header...</string>
    </property>
   </action>
-  <action name="actionGit_Create_Repository">
-   <property name="text">
-    <string>Create Git Repository</string>
-   </property>
-  </action>
-  <action name="actionGit_Commit">
-   <property name="text">
-    <string>Commit</string>
-   </property>
-  </action>
-  <action name="actionGit_Revert">
-   <property name="text">
-    <string>Revert</string>
-   </property>
-  </action>
-  <action name="actionGit_Reset">
-   <property name="text">
-    <string>Reset</string>
-   </property>
-  </action>
-  <action name="actionGit_Add_Files">
-   <property name="text">
-    <string>Add Files</string>
-   </property>
-  </action>
-  <action name="actionGit_Restore">
-   <property name="text">
-    <string>Restore</string>
-   </property>
-  </action>
   <action name="actionWebsite">
    <property name="text">
     <string>Website</string>
    </property>
   </action>
-  <action name="actionGit_Branch">
-   <property name="text">
-    <string>Branch/Switch</string>
-   </property>
-  </action>
-  <action name="actionGit_Merge">
-   <property name="text">
-    <string>Merge</string>
-   </property>
-  </action>
-  <action name="actionGit_Log">
-   <property name="text">
-    <string>Show Log</string>
-   </property>
-   <property name="toolTip">
-    <string>Show Log</string>
-   </property>
-  </action>
-  <action name="actionGit_Remotes">
-   <property name="text">
-    <string>Remotes...</string>
-   </property>
-  </action>
-  <action name="actionGit_Fetch">
-   <property name="text">
-    <string>Fetch</string>
-   </property>
-  </action>
-  <action name="actionGit_Pull">
-   <property name="text">
-    <string>Pull</string>
-   </property>
-  </action>
-  <action name="actionGit_Push">
-   <property name="text">
-    <string>Push</string>
-   </property>
-  </action>
   <action name="actionFilesView_Hide_Non_Support_Files">
    <property name="checkable">
     <bool>true</bool>
-   </property>
-   <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/037-filter.png</normaloff>:/icons/images/newlook24/037-filter.png</iconset>
    </property>
    <property name="text">
     <string>Hide Non Support Files</string>
@@ -3252,8 +2967,8 @@
   </action>
   <action name="actionCompiler_Options">
    <property name="icon">
-    <iconset resource="icons.qrc">
-     <normaloff>:/icons/images/newlook24/084-tools.png</normaloff>:/icons/images/newlook24/084-tools.png</iconset>
+    <iconset resource="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc">
+     <normaloff>:/resources/iconsets/newlook/actions/05Run-17CompilerOptions.svg</normaloff>:/resources/iconsets/newlook/actions/05Run-17CompilerOptions.svg</iconset>
    </property>
    <property name="text">
     <string>Compiler Options...</string>
@@ -3288,6 +3003,9 @@
   <action name="actionGo_to_Line">
    <property name="text">
     <string>Go to Line...</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+G</string>
    </property>
   </action>
   <action name="actionNew_Template">
@@ -3338,6 +3056,9 @@
   <action name="actionToggle_Readonly">
    <property name="text">
     <string>Toggle Readonly</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+R</string>
    </property>
   </action>
   <action name="actionSubmit_Issues">
@@ -3391,7 +3112,7 @@
     <string>Page Up</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::TextHeuristicRole</enum>
+    <enum>QAction::MenuRole::TextHeuristicRole</enum>
    </property>
   </action>
   <action name="actionPage_Down">
@@ -3399,7 +3120,7 @@
     <string>Page Down</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Line_Start">
@@ -3407,7 +3128,7 @@
     <string>Goto Line Start</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Line_End">
@@ -3415,7 +3136,7 @@
     <string>Goto Line End</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_File_Start">
@@ -3423,7 +3144,7 @@
     <string>Goto File Start</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_File_End">
@@ -3431,7 +3152,7 @@
     <string>Goto File End</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionPage_Up_and_Select">
@@ -3439,7 +3160,7 @@
     <string>Page Up and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionPage_Down_and_Select">
@@ -3447,7 +3168,7 @@
     <string>Page Down and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Page_Start">
@@ -3455,7 +3176,7 @@
     <string>Goto Page Start</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Page_End">
@@ -3463,7 +3184,7 @@
     <string>Goto Page End</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Page_Start_and_Select">
@@ -3471,7 +3192,7 @@
     <string>Goto Page Start and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Page_End_and_Select">
@@ -3479,7 +3200,7 @@
     <string>Goto Page End and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Line_Start_and_Select">
@@ -3487,7 +3208,7 @@
     <string>Goto Line Start and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_Line_End_and_Select">
@@ -3495,7 +3216,7 @@
     <string>Goto Line End and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_File_Start_and_Select">
@@ -3503,7 +3224,7 @@
     <string>Goto File Start and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionGoto_File_End_and_Select">
@@ -3511,7 +3232,7 @@
     <string>Goto File End and Select</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionClose_Others">
@@ -3519,7 +3240,7 @@
     <string>Close Others</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionOI_Wiki">
@@ -3527,7 +3248,7 @@
     <string>OI Wiki</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionTurtle_Graphics_Manual">
@@ -3535,7 +3256,29 @@
     <string>Turtle Graphics Tutorial</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionToggle_Bookmark">
+   <property name="text">
+    <string>Toggle Bookmark</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+B</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionCode_Completion">
+   <property name="text">
+    <string>Code Completion</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+/</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
  </widget>
@@ -3570,7 +3313,7 @@
   </customwidget>
  </customwidgets>
  <resources>
-  <include location="icons.qrc"/>
+  <include location="R:/Red_Panda_CPP-static-Release/RedPandaIDE/release/qmake_iconsets_files.qrc"/>
  </resources>
  <connections/>
 </ui>

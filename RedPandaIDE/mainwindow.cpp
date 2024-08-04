@@ -14,45 +14,10 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include "mainwindow.h"
-#include "ui_mainwindow.h"
-#include "editorlist.h"
-#include "editor.h"
-#include "systemconsts.h"
-#include "settings.h"
-#include "qsynedit/constants.h"
-#include "debugger.h"
-#include "widgets/cpudialog.h"
-#include "widgets/filepropertiesdialog.h"
-#include "project.h"
-#include "projecttemplate.h"
-#include "widgets/newprojectdialog.h"
-#include <qt_utils/charsetinfo.h>
-#include "widgets/aboutdialog.h"
-#include "shortcutmanager.h"
-#include "colorscheme.h"
-#include "thememanager.h"
-#include "widgets/darkfusionstyle.h"
-#include "widgets/lightfusionstyle.h"
-#include "problems/problemcasevalidator.h"
-#include "problems/freeprojectsetformat.h"
-#include "widgets/ojproblempropertywidget.h"
-#include "iconsmanager.h"
-#include "widgets/newclassdialog.h"
-#include "widgets/newheaderdialog.h"
-#include "vcs/gitmanager.h"
-#include "vcs/gitrepository.h"
-#include "vcs/gitbranchdialog.h"
-#include "vcs/gitmergedialog.h"
-#include "vcs/gitlogdialog.h"
-#include "vcs/gitremotedialog.h"
-#include "vcs/gituserconfigdialog.h"
-#include "widgets/infomessagebox.h"
-#include "widgets/newtemplatedialog.h"
-#include "visithistorymanager.h"
-#include "widgets/projectalreadyopendialog.h"
-#include "widgets/searchdialog.h"
-
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QMessageBox>
+#include <QTextCodec>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDesktopServices>
@@ -77,17 +42,62 @@
 #include <QMimeType>
 #include <QToolTip>
 #include <QCompleter>
-
-#include "mainwindow.h"
+#include <QUuid>
 #include <QScrollBar>
 #include <QTextDocumentFragment>
 
+#include "mainwindow.h"
+#include "ui_mainwindow.h"
+#include "editorlist.h"
+#include "editor.h"
+#include "systemconsts.h"
+#include "settings.h"
+#include "qsynedit/constants.h"
+#include "debugger/debugger.h"
+#include "utils/escape.h"
+#include "utils/parsearg.h"
+#include "widgets/cpudialog.h"
+#include "widgets/filepropertiesdialog.h"
+#include "widgets/filenameeditdelegate.h"
+#include "project.h"
+#include "projecttemplate.h"
+#include "widgets/newprojectdialog.h"
+#include <qt_utils/charsetinfo.h>
+#include "widgets/aboutdialog.h"
+#include "shortcutmanager.h"
+#include "colorscheme.h"
+#include "thememanager.h"
+#include "widgets/darkfusionstyle.h"
+#include "widgets/lightfusionstyle.h"
+#include "problems/problemcasevalidator.h"
+#include "problems/freeprojectsetformat.h"
+#include "widgets/ojproblempropertywidget.h"
+#include "iconsmanager.h"
+#include "widgets/newclassdialog.h"
+#include "widgets/newheaderdialog.h"
+#ifdef ENABLE_LUA_ADDON
+#include "addon/executor.h"
+#include "addon/runtime.h"
+#endif
+#ifdef ENABLE_VCS
+#include "vcs/gitmanager.h"
+#include "vcs/gitrepository.h"
+#include "vcs/gitbranchdialog.h"
+#include "vcs/gitmergedialog.h"
+#include "vcs/gitlogdialog.h"
+#include "vcs/gitremotedialog.h"
+#include "vcs/gituserconfigdialog.h"
+#endif
+#include "widgets/infomessagebox.h"
+#include "widgets/newtemplatedialog.h"
+#include "visithistorymanager.h"
+#include "widgets/projectalreadyopendialog.h"
+#include "widgets/searchdialog.h"
+
+
 #include "settingsdialog/settingsdialog.h"
 #include "compiler/compilermanager.h"
-#include <QGuiApplication>
-#include <QClipboard>
-#include <QMessageBox>
-#include <QTextCodec>
+#include <qsynedit/document.h>
 #include "cpprefacter.h"
 
 #include "widgets/newprojectunitdialog.h"
@@ -97,6 +107,10 @@
 #include <windows.h>
 #endif
 
+static const char *Translation[] =
+{
+  QT_TRANSLATE_NOOP("QFileSystemModel", "<b>The name \"%1\" cannot be used.</b><p>Try using another name, with fewer characters or no punctuation marks.")
+};
 
 static int findTabIndex(QTabWidget* tabWidget , QWidget* w) {
     for (int i=0;i<tabWidget->count();i++) {
@@ -115,6 +129,8 @@ MainWindow::MainWindow(QWidget *parent)
       mSearchInFilesDialog{nullptr},
       mSearchDialog{nullptr},
       mQuitting{false},
+      mOpeningFiles{false},
+      mOpeningProject{false},
       mClosingProject{false},
       mCheckSyntaxInBack{false},
       mShouldRemoveAllSettings{false},
@@ -126,6 +142,11 @@ MainWindow::MainWindow(QWidget *parent)
 
 {
     ui->setupUi(this);
+    ui->cbProblemCaseValidateType->blockSignals(true);
+    ui->cbProblemCaseValidateType->addItem(tr("Exact"));
+    ui->cbProblemCaseValidateType->addItem(tr("Ignore leading/trailing spaces"));
+    ui->cbProblemCaseValidateType->addItem(tr("Ignore spaces"));
+    ui->cbProblemCaseValidateType->blockSignals(false);
     addActions( this->findChildren<QAction *>(QString(), Qt::FindChildrenRecursively));
 
     //custom actions
@@ -185,10 +206,16 @@ MainWindow::MainWindow(QWidget *parent)
     m=ui->tblBreakpoints->selectionModel();
     ui->tblBreakpoints->setModel(mDebugger->breakpointModel().get());
     delete m;
+    ui->tblBreakpoints->setTextElideMode(Qt::ElideRight);
+    ui->tblBreakpoints->setWordWrap(false);
+    connect(ui->tblBreakpoints, &QTableView::doubleClicked,
+            this, &MainWindow::onBreakpointTableDoubleClicked);
 
     m=ui->tblStackTrace->selectionModel();
     ui->tblStackTrace->setModel(mDebugger->backtraceModel().get());
     delete m;
+    ui->tblStackTrace->setTextElideMode(Qt::ElideRight);
+    ui->tblStackTrace->setWordWrap(false);
 
     m=ui->watchView->selectionModel();
     ui->watchView->setModel(mDebugger->watchModel().get());
@@ -209,11 +236,8 @@ MainWindow::MainWindow(QWidget *parent)
                              e.reason());
     }
 
-//    ui->actionIndent->setShortcut(Qt::Key_Tab);
-//    ui->actionUnIndent->setShortcut(Qt::Key_Tab | Qt::ShiftModifier);
-
     //mainmenu takes the owner
-    mMenuNew = new QMenu();
+    mMenuNew = new QMenu(this);
     mMenuNew->setTitle(tr("New"));
     mMenuNew->addAction(ui->actionNew);
     mMenuNew->addAction(ui->actionNew_GAS_File);
@@ -226,7 +250,6 @@ MainWindow::MainWindow(QWidget *parent)
     mMenuNew->addAction(ui->actionNew_Header);
 
     ui->menuFile->insertMenu(ui->actionOpen,mMenuNew);
-
 
     mMenuExport = new QMenu(tr("Export"));
     mMenuExport->addAction(ui->actionExport_As_RTF);
@@ -253,12 +276,6 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onShowInsertCodeSnippetMenu);
 
     mCPUDialog = nullptr;
-
-//    applySettings();
-//    applyUISettings();
-//    updateProjectView();
-//    updateEditorActions();
-//    updateCaretActions();
 
     ui->cbReplaceInHistory->completer()->setCaseSensitivity(Qt::CaseSensitive);
     ui->cbEvaluate->completer()->setCaseSensitivity(Qt::CaseSensitive);
@@ -349,8 +366,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(&mOJProblemSetModel, &OJProblemSetModel::problemNameChanged,
             this , &MainWindow::onProblemNameChanged);
     ui->pbProblemCases->setVisible(false);
-    connect(&mTcpServer,&QTcpServer::newConnection,
-            this, &MainWindow::onNewProblemConnection);
+    connect(&mCCHandler, &CompetitiveCompanionHandler::newProblemReceived,
+            this, &MainWindow::onNewProblemReceived);
 
     connect(&mOJProblemModel, &OJProblemModel::dataChanged,
             this, &MainWindow::updateProblemTitle);
@@ -372,8 +389,12 @@ MainWindow::MainWindow(QWidget *parent)
     m=ui->treeFiles->selectionModel();
     ui->treeFiles->setModel(&mFileSystemModel);
     delete m;
-    connect(&mFileSystemModel, &QFileSystemModel::layoutChanged,
+    // connect(&mFileSystemModel, &QFileSystemModel::layoutChanged,
+    //         this, &MainWindow::onFileSystemModelLayoutChanged, Qt::QueuedConnection);
+    connect(&mFileSystemModel, &QFileSystemModel::fileRenamed,
             this, &MainWindow::onFileSystemModelLayoutChanged, Qt::QueuedConnection);
+    connect(&mFileSystemModel, &QFileSystemModel::fileRenamed,
+            this, &MainWindow::onFileRenamedInFileSystemModel);
     mFileSystemModel.setReadOnly(false);
     mFileSystemModel.setIconProvider(&mFileSystemModelIconProvider);
 
@@ -383,6 +404,8 @@ MainWindow::MainWindow(QWidget *parent)
     for (int i=1;i<mFileSystemModel.columnCount();i++) {
         ui->treeFiles->hideColumn(i);
     }
+    FilenameEditDelegate *filenameEditDelegate = new FilenameEditDelegate(ui->treeFiles);
+    ui->treeFiles->setItemDelegate(filenameEditDelegate);
     connect(ui->cbFilesPath->lineEdit(),&QLineEdit::returnPressed,
             this,&MainWindow::onFilesViewPathChanged);
     connect(ui->cbFilesPath, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -443,13 +466,27 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->EditorTabsRight, &EditorsTabWidget::middleButtonClicked,
             this, &MainWindow::on_EditorTabsRight_tabCloseRequested);
 
+#ifdef ENABLE_VCS
     //git menu
     connect(ui->menuGit, &QMenu::aboutToShow,
             this, &MainWindow::updateVCSActions);
+#endif
+    //set action group name (show in the option / environment / shortcuts)
+    ui->actionNew->setData(mMenuNew->title());
+    ui->actionNew_GAS_File->setData(mMenuNew->title());
+    ui->actionNew_Text_File->setData(mMenuNew->title());
+    ui->actionNew_Project->setData(mMenuNew->title());
+
+    ui->actionRemove_Watch->setData(tr("Debug"));
+    ui->actionRemove_All_Watches->setData(tr("Debug"));
+    ui->actionModify_Watch->setData(tr("Debug"));
+    ui->actionRemove_All_Watches->setData(tr("Debug"));
+    ui->actionBreakpoint_property->setData(tr("Debug"));
 
     initToolButtons();
     buildContextMenus();
     updateAppTitle();
+    initEditorActions();
     //applySettings();
     applyUISettings();
     initDocks();
@@ -457,8 +494,8 @@ MainWindow::MainWindow(QWidget *parent)
     updateEditorActions();
     updateCaretActions();
     updateEditorColorSchemes();
-    updateShortcuts();
     updateTools();
+    updateShortcuts();
     updateEditorSettings();
     //updateEditorBookmarks();
 }
@@ -513,7 +550,7 @@ void MainWindow::updateStatusbarForLineCol(bool clear)
 
 void MainWindow::updateEditorSettings()
 {
-    pIconsManager->updateEditorGuttorIcons(
+    pIconsManager->updateEditorGutterIcons(
                 pSettings->environment().iconSet(),
                 calIconSize(pSettings->editor().fontName(),pSettings->editor().fontSize())
                 );
@@ -542,11 +579,8 @@ void MainWindow::updateEditorActions()
     updateEditorActions(e);
 }
 
-void MainWindow::updateEditorActions(const Editor *e)
+void MainWindow::updateEncodingActions(const Editor *e)
 {
-    //it's not a compile action, but put here for convinience
-    ui->actionSaveAll->setEnabled(
-                (mProject!=nullptr || mEditorList->pageCount()>0));
     if (e==nullptr) {
         ui->actionAuto_Detect->setEnabled(false);
         ui->actionEncode_in_ANSI->setEnabled(false);
@@ -556,6 +590,30 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionConvert_to_ANSI->setEnabled(false);
         ui->actionConvert_to_UTF_8->setEnabled(false);
         ui->actionConvert_to_UTF_8_BOM->setEnabled(false);
+    } else {
+        ui->actionAuto_Detect->setEnabled(true);
+        ui->actionEncode_in_ANSI->setEnabled(true);
+        ui->actionEncode_in_UTF_8->setEnabled(true);
+        ui->actionEncode_in_UTF_8_BOM->setEnabled(true);
+        mMenuEncoding->setEnabled(true);
+        ui->actionConvert_to_ANSI->setEnabled(e->encodingOption()!=ENCODING_SYSTEM_DEFAULT
+                && e->fileEncoding()!=ENCODING_SYSTEM_DEFAULT);
+        ui->actionConvert_to_UTF_8->setEnabled(e->encodingOption()!=ENCODING_UTF8 && e->fileEncoding()!=ENCODING_UTF8);
+        ui->actionConvert_to_UTF_8_BOM->setEnabled(e->encodingOption()!=ENCODING_UTF8_BOM && e->fileEncoding()!=ENCODING_UTF8_BOM);
+    }
+}
+
+void MainWindow::updateEditorActions(const Editor *e)
+{
+    ui->menuCode->menuAction()->setVisible(mEditorList->pageCount()>0);
+    ui->menuEdit->menuAction()->setVisible(mEditorList->pageCount()>0);
+    ui->menuSelection->menuAction()->setVisible(mEditorList->pageCount()>0);
+    ui->menuRefactor->menuAction()->setVisible(mEditorList->pageCount()>0);
+
+    //it's not a compile action, but put here for convinience
+    ui->actionSaveAll->setEnabled(
+                (mProject!=nullptr || mEditorList->pageCount()>0));
+    if (e==nullptr || !e->hasFocus()) {
         ui->actionCopy->setEnabled(false);
         ui->actionCut->setEnabled(false);
         ui->actionFoldAll->setEnabled(false);
@@ -567,7 +625,6 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionExport_As_HTML->setEnabled(false);
         ui->actionExport_As_RTF->setEnabled(false);
         ui->actionPrint->setEnabled(false);
-        ui->actionSelectAll->setEnabled(false);
         ui->actionToggleComment->setEnabled(false);
         ui->actionToggle_Block_Comment->setEnabled(false);
         ui->actionUnIndent->setEnabled(false);
@@ -581,6 +638,28 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionDelete_to_Word_End->setEnabled(false);
         ui->actionDelete_Last_Word->setEnabled(false);
 
+        ui->menuMove_Caret->setEnabled(false);
+        ui->actionPage_Up->setEnabled(false);
+        ui->actionPage_Down->setEnabled(false);
+        ui->actionGoto_Line_Start->setEnabled(false);
+        ui->actionGoto_Line_End->setEnabled(false);
+        ui->actionGoto_File_Start->setEnabled(false);
+        ui->actionGoto_File_End->setEnabled(false);
+        ui->actionGoto_Page_Start->setEnabled(false);
+        ui->actionGoto_Page_End->setEnabled(false);
+
+        ui->actionSelectAll->setEnabled(false);
+        ui->actionSelect_Word->setEnabled(false);
+        ui->actionMove_Selection_Up->setEnabled(false);
+        ui->actionMove_Selection_Down->setEnabled(false);
+        ui->actionPage_Up_and_Select->setEnabled(false);
+        ui->actionPage_Down_and_Select->setEnabled(false);
+        ui->actionGoto_Line_Start_and_Select->setEnabled(false);
+        ui->actionGoto_Line_End_and_Select->setEnabled(false);
+        ui->actionGoto_File_Start_and_Select->setEnabled(false);
+        ui->actionGoto_File_End_and_Select->setEnabled(false);
+        ui->actionGoto_Page_Start_and_Select->setEnabled(false);
+        ui->actionGoto_Page_End_and_Select->setEnabled(false);
 
         ui->actionFind->setEnabled(false);
         ui->actionReplace->setEnabled(false);
@@ -594,11 +673,18 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionClose_All->setEnabled(false);
         ui->actionClose_Others->setEnabled(false);
 
-        ui->actionAdd_bookmark->setEnabled(false);
-        ui->actionRemove_Bookmark->setEnabled(false);
+        ui->actionToggle_Bookmark->setEnabled(false);
         ui->actionModify_Bookmark_Description->setEnabled(false);
 
+        ui->actionMatch_Bracket->setEnabled(false);
         ui->actionGo_to_Line->setEnabled(false);
+        ui->actionGoto_block_start->setEnabled(false);
+        ui->actionGoto_block_end->setEnabled(false);
+        ui->actionTrim_trailing_spaces->setEnabled(false);
+        mMenuInsertCodeSnippet->setEnabled(false);
+
+        ui->actionRename_Symbol->setEnabled(false);
+
         ui->actionLocate_in_Files_View->setEnabled(false);
         ui->actionToggle_Readonly->setEnabled(false);
 
@@ -608,19 +694,9 @@ void MainWindow::updateEditorActions(const Editor *e)
 
         ui->actionMove_To_Other_View->setEnabled(false);
     } else {
-        ui->actionAuto_Detect->setEnabled(true);
-        ui->actionEncode_in_ANSI->setEnabled(true);
-        ui->actionEncode_in_UTF_8->setEnabled(true);
-        ui->actionEncode_in_UTF_8_BOM->setEnabled(true);
-        mMenuEncoding->setEnabled(true);
-        ui->actionConvert_to_ANSI->setEnabled(e->encodingOption()!=ENCODING_SYSTEM_DEFAULT
-                && e->fileEncoding()!=ENCODING_SYSTEM_DEFAULT);
-        ui->actionConvert_to_UTF_8->setEnabled(e->encodingOption()!=ENCODING_UTF8 && e->fileEncoding()!=ENCODING_UTF8);
-        ui->actionConvert_to_UTF_8_BOM->setEnabled(e->encodingOption()!=ENCODING_UTF8_BOM && e->fileEncoding()!=ENCODING_UTF8_BOM);
-
         ui->actionCopy->setEnabled(true);
         ui->actionCut->setEnabled(true);
-        ui->actionFoldAll->setEnabled(e->document()->count()>0);
+        ui->actionFoldAll->setEnabled(e->lineCount()>0);
         ui->actionIndent->setEnabled(!e->readOnly());
         ui->actionPaste->setEnabled(!e->readOnly());
         ui->actionRedo->setEnabled(e->canRedo());
@@ -630,19 +706,40 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionExport_As_HTML->setEnabled(true);
         ui->actionExport_As_RTF->setEnabled(true);
         ui->actionPrint->setEnabled(true);
-        ui->actionSelectAll->setEnabled(e->document()->count()>0);
-        ui->actionToggleComment->setEnabled(!e->readOnly() && e->document()->count()>0);
+        ui->actionToggleComment->setEnabled(!e->readOnly() && e->lineCount()>0);
         ui->actionToggle_Block_Comment->setEnabled(!e->readOnly() && e->selAvail());
-        ui->actionUnIndent->setEnabled(!e->readOnly() && e->document()->count()>0);
-        ui->actionUnfoldAll->setEnabled(e->document()->count()>0);
-        ui->actionDelete_Line->setEnabled(!e->readOnly() && e->document()->count()>0);
-        ui->actionDelete_Word->setEnabled(!e->readOnly() && e->document()->count()>0);
-        ui->actionDuplicate_Line->setEnabled(!e->readOnly() && e->document()->count()>0);
-        ui->actionDelete_to_BOL->setEnabled(!e->readOnly() && e->document()->count()>0);
-        ui->actionDelete_to_EOL->setEnabled(!e->readOnly() && e->document()->count()>0);
-        ui->actionDelete_to_Word_End->setEnabled(!e->readOnly() && e->document()->count()>0);
-        ui->actionDelete_Last_Word->setEnabled(!e->readOnly() && e->document()->count()>0);
+        ui->actionUnIndent->setEnabled(!e->readOnly() && e->lineCount()>0);
+        ui->actionUnfoldAll->setEnabled(e->lineCount()>0);
+        ui->actionDelete_Line->setEnabled(!e->readOnly() && e->lineCount()>0);
+        ui->actionDelete_Word->setEnabled(!e->readOnly() && e->lineCount()>0);
+        ui->actionDuplicate_Line->setEnabled(!e->readOnly() && e->lineCount()>0);
+        ui->actionDelete_to_BOL->setEnabled(!e->readOnly() && e->lineCount()>0);
+        ui->actionDelete_to_EOL->setEnabled(!e->readOnly() && e->lineCount()>0);
+        ui->actionDelete_to_Word_End->setEnabled(!e->readOnly() && e->lineCount()>0);
+        ui->actionDelete_Last_Word->setEnabled(!e->readOnly() && e->lineCount()>0);
 
+        ui->menuMove_Caret->setEnabled(true);
+        ui->actionPage_Up->setEnabled(true);
+        ui->actionPage_Down->setEnabled(true);
+        ui->actionGoto_Line_Start->setEnabled(true);
+        ui->actionGoto_Line_End->setEnabled(true);
+        ui->actionGoto_File_Start->setEnabled(true);
+        ui->actionGoto_File_End->setEnabled(true);
+        ui->actionGoto_Page_Start->setEnabled(true);
+        ui->actionGoto_Page_End->setEnabled(true);
+
+        ui->actionSelectAll->setEnabled(e->lineCount()>0);
+        ui->actionSelect_Word->setEnabled(true);
+        ui->actionMove_Selection_Up->setEnabled(true);
+        ui->actionMove_Selection_Down->setEnabled(true);
+        ui->actionPage_Up_and_Select->setEnabled(true);
+        ui->actionPage_Down_and_Select->setEnabled(true);
+        ui->actionGoto_Line_Start_and_Select->setEnabled(true);
+        ui->actionGoto_Line_End_and_Select->setEnabled(true);
+        ui->actionGoto_File_Start_and_Select->setEnabled(true);
+        ui->actionGoto_File_End_and_Select->setEnabled(true);
+        ui->actionGoto_Page_Start_and_Select->setEnabled(true);
+        ui->actionGoto_Page_End_and_Select->setEnabled(true);
 
         ui->actionFind->setEnabled(true);
         ui->actionReplace->setEnabled(true);
@@ -657,11 +754,18 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionClose_Others->setEnabled(mEditorList->pageCount()>1);
 
         int line = e->caretY();
-        ui->actionAdd_bookmark->setEnabled(e->document()->count()>0 && !e->hasBookmark(line));
-        ui->actionRemove_Bookmark->setEnabled(e->hasBookmark(line));
+        ui->actionToggle_Bookmark->setEnabled(e->lineCount()>0);
         ui->actionModify_Bookmark_Description->setEnabled(e->hasBookmark(line));
 
+        ui->actionMatch_Bracket->setEnabled(true);
         ui->actionGo_to_Line->setEnabled(true);
+        ui->actionGoto_block_start->setEnabled(true);
+        ui->actionGoto_block_end->setEnabled(true);
+        ui->actionTrim_trailing_spaces->setEnabled(true);
+        mMenuInsertCodeSnippet->setEnabled(true);
+
+        ui->actionRename_Symbol->setEnabled(true);
+
         ui->actionLocate_in_Files_View->setEnabled(!e->isNew());
         ui->actionToggle_Readonly->setEnabled(!e->modified());
 
@@ -672,6 +776,7 @@ void MainWindow::updateEditorActions(const Editor *e)
         ui->actionMove_To_Other_View->setEnabled(editorList()->pageCount()>1);
     }
 
+    updateEncodingActions(e);
     updateCompileActions(e);
     updateCompilerSet(e);
 }
@@ -680,6 +785,8 @@ void MainWindow::updateEditorActions(const Editor *e)
 void MainWindow::updateProjectActions()
 {
     bool hasProject = (mProject != nullptr);
+    ui->menuProject->menuAction()->setVisible(hasProject);
+
     ui->actionNew_Template->setEnabled(hasProject);
     ui->actionView_Makefile->setEnabled(hasProject);
     ui->actionProject_New_File->setEnabled(hasProject);
@@ -713,35 +820,60 @@ void MainWindow::updateCompileActions(const Editor *e)
     } else {
         bool forProject=false;
         bool canRun = false;
+        bool canDebug = false;
         bool canCompile = false;
         bool canGenerateAssembly=false;
-        if (e) {
-            if (!e->inProject()) {
-                FileType fileType = getFileType(e->filename());
-                if (fileType == FileType::CSource
-                        || fileType == FileType::CppSource) {
-                    canGenerateAssembly = true;
-                    canCompile = true;
-                    canRun = true;
-                } else if (fileType == FileType::GAS) {
-                    canCompile = true;
-                    canRun = true;
-                }
-            } else {
-                 forProject = (mProject!=nullptr);
-            }
-        }  else {
-            forProject = (mProject!=nullptr);
-        }
-        if (forProject) {
-            canCompile = true;
-            canRun = (mProject->options().type !=ProjectType::DynamicLib)
-                    && (mProject->options().type !=ProjectType::StaticLib);
+        Settings::PCompilerSet set=pSettings->compilerSets().getSet(mCompilerSet->currentIndex());
+        if (set) {
             if (e) {
-                FileType fileType = getFileType(e->filename());
-                if (fileType == FileType::CSource
-                        || fileType == FileType::CppSource) {
-                    canGenerateAssembly = true;
+                if (!e->inProject()) {
+                    FileType fileType = getFileType(e->filename());
+                    switch(fileType) {
+                    case FileType::CSource:
+                        canCompile = set->canCompileC();
+                        //qDebug()<<(int)set->compilerType();
+#ifdef ENABLE_SDCC
+                        if (set->compilerType()!=CompilerType::SDCC)
+#endif
+                        {
+                            canGenerateAssembly = canCompile;
+                            canRun = canCompile ;
+                        }
+                        //qDebug()<<canCompile<<canRun;
+                        canDebug = set->canDebug();
+                        break;
+                    case FileType::CppSource:
+                        canCompile = set->canCompileCPP();
+                        canGenerateAssembly = canCompile;
+                        canRun = canCompile;
+                        canDebug = set->canDebug();
+                        break;
+                    case FileType::GAS:
+                        if (set->compilerType()==CompilerType::GCC
+                                || set->compilerType()==CompilerType::GCC_UTF8) {
+                            canCompile = true;
+                            canRun = canCompile;
+                            canDebug = set->canDebug();
+                        }
+                        break;
+                    }
+                } else {
+                     forProject = (mProject!=nullptr);
+                }
+            }  else {
+                forProject = (mProject!=nullptr);
+            }
+            if (forProject) {
+                canCompile = true;
+                canRun = (mProject->options().type !=ProjectType::DynamicLib)
+                        && (mProject->options().type !=ProjectType::StaticLib);
+                canDebug = set->canDebug() && canRun;
+                if (e) {
+                    FileType fileType = getFileType(e->filename());
+                    if (fileType == FileType::CSource
+                            || fileType == FileType::CppSource) {
+                        canGenerateAssembly = true;
+                    }
                 }
             }
         }
@@ -749,7 +881,7 @@ void MainWindow::updateCompileActions(const Editor *e)
         ui->actionRun->setEnabled(canRun);
         ui->actionRebuild->setEnabled(canCompile);
         ui->actionGenerate_Assembly->setEnabled(canGenerateAssembly);
-        ui->actionDebug->setEnabled(canRun);
+        ui->actionDebug->setEnabled(canDebug);
         mProblem_RunAllCases->setEnabled(canRun && mOJProblemModel.count()>0);
     }
     if (!mDebugger->executing()) {
@@ -862,31 +994,35 @@ void MainWindow::updateEditorColorSchemes()
 void MainWindow::applySettings()
 {
     ThemeManager themeManager;
-    if (pSettings->environment().useCustomTheme()) {
-        themeManager.prepareCustomeTheme();
-    }
-    themeManager.setUseCustomTheme(pSettings->environment().useCustomTheme());
+    PAppTheme appTheme;
     try {
-        PAppTheme appTheme = themeManager.theme(pSettings->environment().theme());
-        if (appTheme->useQtFusionStyle()) {
-            if (appTheme->isDark())
-                QApplication::setStyle(new DarkFusionStyle());//app takes the onwership
-            else
-                QApplication::setStyle(new LightFusionStyle());//app takes the onwership
-        } else {
-            QString systemStyle = QStyleFactory::keys()[0]; // Breeze for KDE, etc.
-            QApplication::setStyle(systemStyle);
-        }
-        qApp->setPalette(appTheme->palette());
-        //fix for qstatusbar bug
-        mFileEncodingStatus->setPalette(appTheme->palette());
-        mFileModeStatus->setPalette(appTheme->palette());
-        mFileInfoStatus->setPalette(appTheme->palette());
+        appTheme = themeManager.theme(pSettings->environment().theme());
     } catch (FileError e) {
         QMessageBox::critical(this,
                               tr("Load Theme Error"),
                               e.reason());
+        appTheme = AppTheme::fallbackTheme();
     }
+#ifdef ENABLE_LUA_ADDON
+    catch (AddOn::LuaError e) {
+        QMessageBox::critical(this,
+                              tr("Load Theme Error"),
+                              e.reason());
+        appTheme = AppTheme::fallbackTheme();
+    }
+#endif
+    const QString& style = appTheme->style();
+    if (style == "RedPandaDarkFusion")
+        QApplication::setStyle(new DarkFusionStyle());//app takes the onwership
+    else if (style == "RedPandaLightFusion")
+        QApplication::setStyle(new LightFusionStyle());//app takes the onwership
+    else
+        QApplication::setStyle(style);
+    qApp->setPalette(appTheme->palette());
+    //fix for qstatusbar bug
+    mFileEncodingStatus->setPalette(appTheme->palette());
+    mFileModeStatus->setPalette(appTheme->palette());
+    mFileInfoStatus->setPalette(appTheme->palette());
 
     updateEditorColorSchemes();
 
@@ -921,28 +1057,16 @@ void MainWindow::applySettings()
     ui->txtProblemCaseExpected->setFont(caseEditorFont);
     ui->lblProblemCaseExpected->setFont(caseEditorFont);
 
-    mTcpServer.close();
-    if (pSettings->executor().enableProblemSet()) {
-        if (pSettings->executor().enableCompetitiveCompanion()) {
-            if (!mTcpServer.listen(QHostAddress::LocalHost,pSettings->executor().competivieCompanionPort())) {
-//                QMessageBox::critical(nullptr,
-//                                      tr("Listen failed"),
-//                                      tr("Can't listen to port %1 form Competitive Companion.").arg(10045)
-//                                      + "<BR/>"
-//                                      +tr("You can turn off competitive companion support in the Problem Set options.")
-//                                      + "<BR/>"
-//                                      +tr("Or You can choose a different port number and try again."));
-            }
-        }
-    }
+    mCCHandler.stop();
+    mCCHandler.start();
 
     showHideInfosTab(ui->tabProblemSet,pSettings->ui().showProblemSet()
                      && pSettings->executor().enableProblemSet());
     showHideMessagesTab(ui->tabProblem, pSettings->ui().showProblem()
                         && pSettings->executor().enableProblemSet());
 
-    ui->chkIgnoreSpaces->setChecked(pSettings->executor().ignoreSpacesWhenValidatingCases());
-    ui->actionInterrupt->setVisible(pSettings->debugger().useGDBServer());
+    ui->cbProblemCaseValidateType->setCurrentIndex((int)(pSettings->executor().problemCaseValidateType()));
+    ui->actionInterrupt->setVisible(mDebugger && mDebugger->useDebugServer());
     //icon sets for editors
     updateEditorSettings();
     updateDebuggerSettings();
@@ -959,9 +1083,6 @@ void MainWindow::applySettings()
 //    for (int i=0;i<ui->cbFilesPath->count();i++) {
 //        ui->cbFilesPath->setItemIcon(i,pIconsManager->getIcon(IconsManager::FILESYSTEM_GIT));
 //    }
-
-    ui->menuGit->menuAction()->setVisible(pSettings->vcs().gitOk());
-
     stretchExplorerPanel(!ui->tabExplorer->isShrinked());
     stretchMessagesPanel(!ui->tabMessages->isShrinked());
 }
@@ -1039,14 +1160,14 @@ void MainWindow::setActiveBreakpoint(QString fileName, int Line, bool setFocus)
 {
     removeActiveBreakpoints();
     // Then active the current line in the current file
-    Editor *e = openFile(fileName);
+    Editor *e = openFile(fileName, false);
     if (e!=nullptr) {
         e->setActiveBreakpointFocus(Line,setFocus);
         if (setFocus) {
             activateWindow();
         }
     } else {
-        showCPUInfoDialog();
+    //   showCPUInfoDialog();
     }
     return;
 }
@@ -1060,6 +1181,7 @@ void MainWindow::updateDPI(int oldDPI, int /*newDPI*/)
 
 void MainWindow::onFileSaved(const QString &path, bool inProject)
 {
+#ifdef ENABLE_VCS
     if (pSettings->vcs().gitOk()) {
         QString branch;
         if (inProject && mProject && mProject->model()->iconProvider()->VCSRepository()->hasRepository(branch)) {
@@ -1080,7 +1202,85 @@ void MainWindow::onFileSaved(const QString &path, bool inProject)
             ui->treeFiles->update(index);
         }
     }
+#else
+    Q_UNUSED(path);
+    Q_UNUSED(inProject);
+#endif
     //updateForEncodingInfo();
+}
+
+void MainWindow::executeTool(PToolItem item)
+{
+    QMap<QString, QString> macros = devCppMacroVariables();
+    QString program = parseMacros(item->program, macros);
+    QString workDir = parseMacros(item->workingDirectory, macros);
+    QStringList params = parseArguments(item->parameters, macros, true);
+    Editor *e;
+    QByteArray inputContent;
+    QByteArray output;
+    clearToolsOutput();
+    switch(item->inputOrigin) {
+    case ToolItemInputOrigin::None:
+        break;
+    case ToolItemInputOrigin::CurrentSelection:
+        e=mEditorList->getEditor();
+        if (e)
+            inputContent=stringToByteArray(e->selText(), item->isUTF8);
+        break;
+    case ToolItemInputOrigin::WholeDocument:
+        e=mEditorList->getEditor();
+        if (e)
+            inputContent=stringToByteArray(e->text(), item->isUTF8);
+        break;
+    }
+    QString command;
+#ifdef Q_OS_WIN
+    if (!fileExists(program)) {
+        QTemporaryFile file(QDir::tempPath()+QDir::separator()+"XXXXXX.bat");
+        file.setAutoRemove(false);
+        if (file.open()) {
+            QString localizedDir=localizePath(workDir);
+            if (!localizedDir.isEmpty()) {
+                file.write(escapeCommandForPlatformShell(
+                    "cd", {"/d", localizedDir}
+                    ).toLocal8Bit() + LINE_BREAKER);
+            }
+            file.write(escapeCommandForPlatformShell(program, params).toLocal8Bit()
+                       + LINE_BREAKER);
+            file.close();
+            QString cmd="cmd";
+            QStringList args{"/C",file.fileName()};
+            command = escapeCommandForPlatformShell(cmd, args);
+            output = runAndGetOutput(cmd, workDir, args, inputContent);
+        }
+    } else {
+#endif
+        command = escapeCommandForPlatformShell(program, params);
+        output = runAndGetOutput(program, workDir, params, inputContent);
+#ifdef Q_OS_WIN
+    }
+#endif
+    switch(item->outputTarget) {
+    case ToolItemOutputTarget::RedirectToToolsOutputPanel:
+        logToolsOutput(tr(" - Command: %1").arg(command));
+        logToolsOutput("");
+        logToolsOutput(byteArrayToString(output, item->isUTF8));
+        stretchMessagesPanel(true);
+        ui->tabMessages->setCurrentWidget(ui->tabToolsOutput);
+        break;
+    case ToolItemOutputTarget::RedirectToNull:
+        break;
+    case ToolItemOutputTarget::RepalceWholeDocument:
+        e=mEditorList->getEditor();
+        if (e)
+            e->replaceContent(byteArrayToString(output, item->isUTF8));
+        break;
+    case ToolItemOutputTarget::ReplaceCurrentSelection:
+        e=mEditorList->getEditor();
+        if (e)
+            e->setSelText(byteArrayToString(output, item->isUTF8));
+        break;
+    }
 }
 
 int MainWindow::calIconSize(const QString &fontName, int fontPointSize)
@@ -1120,6 +1320,9 @@ void MainWindow::updateAppTitle()
 void MainWindow::updateAppTitle(const Editor *e)
 {
     QString appName=tr("Red Panda C++");
+#ifdef APP_VERSION_SUFFIX
+    appName += tr(" %1 Version").arg(APP_VERSION_SUFFIX);
+#endif
     QCoreApplication *app = QApplication::instance();
     if (e && !e->inProject()) {
         QString str;
@@ -1363,6 +1566,8 @@ void MainWindow::updateShortcuts()
 {
     ShortcutManager manager;
     manager.load();
+    // foreach(QAction* action, listShortCutableActions())
+    //     qDebug()<<action->text()<<action->objectName();
     manager.applyTo(listShortCutableActions());
 }
 
@@ -1379,11 +1584,37 @@ QMenuBar *MainWindow::menuBar() const
 void MainWindow::updateStatusbarForLineCol(const Editor* e, bool clear)
 {
     if (!clear && e!=nullptr) {
-        int col = e->charToColumn(e->caretY(),e->caretX());
-        QString msg = tr("Line: %1 Col: %2 Lines: %3")
-                .arg(e->caretY())
-                .arg(col)
-                .arg(e->document()->count());
+        QString msg;
+        if (pSettings->editor().forceFixedFontWidth()){
+            int col = e->charToGlyphLeft(e->caretY(),e->caretX())/e->charWidth()+1;
+            if (e->selAvail()) {
+                msg = tr("Line: %1/%2 Col: %3 Sel: %4")
+                        .arg(e->caretY())
+                        .arg(e->lineCount())
+                        .arg(col)
+                        .arg(e->selCount());
+            } else {
+                msg = tr("Line: %1/%2 Col: %3")
+                        .arg(e->caretY())
+                        .arg(e->lineCount())
+                        .arg(col);
+            }
+        } else {
+            if (e->selAvail()) {
+                msg = tr("Line: %1/%2 Char: %3/%4 Sel: %5")
+                        .arg(e->caretY())
+                        .arg(e->lineCount())
+                        .arg(e->caretX())
+                        .arg(e->lineText().length())
+                        .arg(e->selCount());
+            } else {
+                msg = tr("Line: %1/%2 Char: %3/%4")
+                        .arg(e->caretY())
+                        .arg(e->lineCount())
+                        .arg(e->caretX())
+                        .arg(e->lineText().length());
+            }
+        }
         mFileInfoStatus->setText(msg);
     } else {
         mFileInfoStatus->setText("");
@@ -1435,11 +1666,18 @@ void MainWindow::setProjectCurrentFile(const QString &filename)
 
 void MainWindow::openFiles(const QStringList &files)
 {
+    mOpeningFiles=true;
     mEditorList->beginUpdate();
-    mOpenningFiles = true;
     auto end = finally([this] {
         this->mEditorList->endUpdate();
-        mOpenningFiles = false;
+        mOpeningFiles=false;
+        Editor* e=mEditorList->getEditor();
+        if (e) {
+            e->reparse(false);
+            e->checkSyntaxInBack();
+            e->reparseTodo();
+            e->activate();
+        }
     });
     //Check if there is a project file in the list and open it
     for (const QString& file:files) {
@@ -1455,10 +1693,6 @@ void MainWindow::openFiles(const QStringList &files)
     if (files.length()>0) {
         openFile(files.last(),true);
     }
-    mEditorList->endUpdate();
-    Editor* e=mEditorList->getEditor();
-    if (e)
-        e->activate();
 }
 
 Editor* MainWindow::openFile(QString filename, bool activate, QTabWidget* page)
@@ -1516,6 +1750,10 @@ Editor* MainWindow::openFile(QString filename, bool activate, QTabWidget* page)
 
 void MainWindow::openProject(QString filename, bool openFiles)
 {
+    mOpeningProject=true;
+    auto action=finally([this]{
+        mOpeningProject=false;
+    });
     if (!fileExists(filename)) {
         return;
     }
@@ -1673,8 +1911,7 @@ void MainWindow::updateCompilerSet(const Editor *e)
     if (mProject) {
         if ( !e || e->inProject()) {
             index = mProject->options().compilerSet;
-        } else if (e->syntaxer()
-                   && e->syntaxer()->language()==QSynedit::ProgrammingLanguage::Makefile
+        } else if (e->syntaxer()->language()==QSynedit::ProgrammingLanguage::Makefile
                    && mProject->directory() == extractFileDir(e->filename())) {
             index = mProject->options().compilerSet;
         }
@@ -1728,6 +1965,12 @@ void MainWindow::updateActionIcons()
     for (QToolButton* btn: ui->panelFiles->findChildren<QToolButton *>()) {
         btn->setIconSize(iconSize);
     }
+    for (QToolButton* btn: ui->tabProblemSet->findChildren<QToolButton *>()) {
+        btn->setIconSize(iconSize);
+    }
+    for (QToolButton* btn: ui->panelProblemCaseInfo->findChildren<QToolButton *>()) {
+        btn->setIconSize(iconSize);
+    }
 
     ui->tabExplorer->setIconSize(iconSize);
     ui->tabMessages->setIconSize(iconSize);
@@ -1761,8 +2004,7 @@ void MainWindow::updateActionIcons()
 
     ui->actionBack->setIcon(pIconsManager->getIcon(IconsManager::ACTION_CODE_BACK));
     ui->actionForward->setIcon(pIconsManager->getIcon(IconsManager::ACTION_CODE_FORWARD));
-    ui->actionAdd_bookmark->setIcon(pIconsManager->getIcon(IconsManager::ACTION_CODE_ADD_BOOKMARK));
-    ui->actionRemove_Bookmark->setIcon(pIconsManager->getIcon(IconsManager::ACTION_CODE_REMOVE_BOOKMARK));
+    ui->actionToggle_Bookmark->setIcon(pIconsManager->getIcon(IconsManager::ACTION_CODE_ADD_BOOKMARK));
     ui->actionReformat_Code->setIcon(pIconsManager->getIcon(IconsManager::ACTION_CODE_REFORMAT));
 
     ui->actionProject_New_File->setIcon(pIconsManager->getIcon(IconsManager::ACTION_PROJECT_NEW_FILE));
@@ -1924,8 +2166,6 @@ void MainWindow::checkSyntaxInBack(Editor *e)
         return;
     if (mCompilerManager->compiling())
         return;
-    if (!pSettings->compilerSets().defaultSet())
-        return;
     if (mCheckSyntaxInBack)
         return;
 
@@ -1941,8 +2181,15 @@ void MainWindow::checkSyntaxInBack(Editor *e)
     clearIssues();
     CompileTarget target =getCompileTarget();
     if (target ==CompileTarget::Project) {
+        int index = mProject->options().compilerSet;
+        Settings::PCompilerSet set = pSettings->compilerSets().getSet(index);
+        if (!set || !CompilerInfoManager::supportSyntaxCheck(set->compilerType()))
+            return;
         mCompilerManager->checkSyntax(e->filename(), e->fileEncoding(), e->text(), mProject);
     } else {
+        Settings::PCompilerSet set = pSettings->compilerSets().defaultSet();
+        if (!set || !CompilerInfoManager::supportSyntaxCheck(set->compilerType()))
+            return;
         mCompilerManager->checkSyntax(e->filename(),e->fileEncoding(),e->text(), nullptr);
     }
 }
@@ -1998,7 +2245,7 @@ bool MainWindow::compile(bool rebuild, CppCompileType compileType)
         }
         mProject->buildPrivateResource();
         if (mCompileSuccessionTask) {
-            mCompileSuccessionTask->execName = mProject->executable();
+            mCompileSuccessionTask->execName = mProject->outputFilename();
             mCompileSuccessionTask->isExecutable = true;
         }
         stretchMessagesPanel(true);
@@ -2038,9 +2285,11 @@ bool MainWindow::compile(bool rebuild, CppCompileType compileType)
                     mCompileSuccessionTask->isExecutable = true;
                 }
                 if (!mCompileSuccessionTask->isExecutable) {
-                    Editor *editor = mEditorList->getOpenedEditorByFilename(mCompileSuccessionTask->execName);
-                    if (editor)
+                    QString targetFileName = QFileInfo(mCompileSuccessionTask->execName).absoluteFilePath();
+                    Editor *editor = mEditorList->getOpenedEditorByFilename(targetFileName);
+                    if (editor) {
                         mEditorList->closeEditor(editor,false,true);
+                    }
                 }
             }
             stretchMessagesPanel(true);
@@ -2071,7 +2320,9 @@ void MainWindow::runExecutable(
             return;
         }
     } else {
-        if (!filename.isEmpty() && compareFileModifiedTime(filename,exeName)>=0) {
+        if (!filename.isEmpty() &&
+                ( compareFileModifiedTime(filename,exeName)>=0
+                  || compareFileModifiedTime(exeName, pSettings->compilerSets().defaultIndexTimestamp())<=0 )) {
             doCompileRun(runType);
             return;
         }
@@ -2116,14 +2367,14 @@ void MainWindow::runExecutable(RunType runType)
     CompileTarget target =getCompileTarget();
     if (target == CompileTarget::Project) {
         QStringList binDirs = mProject->binDirs();
-        QFileInfo execInfo(mProject->executable());
+        QFileInfo execInfo(mProject->outputFilename());
         QDateTime execModTime = execInfo.lastModified();
         if (execInfo.exists() && mProject->modifiedSince(execModTime)) {
             //if project options changed, or units added/removed
             //mProject->saveAll();
             mCompileSuccessionTask=std::make_shared<CompileSuccessionTask>();
             mCompileSuccessionTask->type = runTypeToCompileSuccessionTaskType(runType);
-            mCompileSuccessionTask->execName=mProject->executable();
+            mCompileSuccessionTask->execName=mProject->outputFilename();
             mCompileSuccessionTask->isExecutable=true;
             mCompileSuccessionTask->binDirs=binDirs;
             compile(true);
@@ -2134,14 +2385,14 @@ void MainWindow::runExecutable(RunType runType)
             //mProject->saveAll();
             mCompileSuccessionTask=std::make_shared<CompileSuccessionTask>();
             mCompileSuccessionTask->type = runTypeToCompileSuccessionTaskType(runType);
-            mCompileSuccessionTask->execName=mProject->executable();
+            mCompileSuccessionTask->execName=mProject->outputFilename();
             mCompileSuccessionTask->isExecutable=true;
             mCompileSuccessionTask->binDirs=binDirs;
             compile();
             return;
         }
 
-        runExecutable(mProject->executable(),mProject->filename(),runType,
+        runExecutable(mProject->outputFilename(),mProject->filename(),runType,
                       binDirs);
     } else {
         Editor * editor = mEditorList->getEditor();
@@ -2195,7 +2446,7 @@ void MainWindow::debug()
     QStringList binDirs;
     QSet<QString> unitFiles;
     switch(getCompileTarget()) {
-    case CompileTarget::Project:
+    case CompileTarget::Project: {
         compilerSet=pSettings->compilerSets().getSet(mProject->options().compilerSet);
         if (!compilerSet)
             compilerSet = pSettings->compilerSets().defaultSet();
@@ -2231,24 +2482,24 @@ void MainWindow::debug()
         }
 
         // Did we compile?
-        if (!fileExists(mProject->executable())) {
+        if (!fileExists(mProject->outputFilename())) {
             mCompileSuccessionTask=std::make_shared<CompileSuccessionTask>();
             mCompileSuccessionTask->type = CompileSuccessionTaskType::Debug;
-            mCompileSuccessionTask->execName = mProject->executable();
+            mCompileSuccessionTask->execName = mProject->outputFilename();
             mCompileSuccessionTask->isExecutable = true;
             mCompileSuccessionTask->binDirs = binDirs;
             compile();
             return;
         }
         {
-            QFileInfo execInfo(mProject->executable());
+            QFileInfo execInfo(mProject->outputFilename());
             QDateTime execModTime = execInfo.lastModified();
             if (execInfo.exists() && mProject->modifiedSince(execModTime)) {
                 //if project options changed, or units added/removed
                 //mProject->saveAll();
                 mCompileSuccessionTask=std::make_shared<CompileSuccessionTask>();
                 mCompileSuccessionTask->type = CompileSuccessionTaskType::Debug;
-                mCompileSuccessionTask->execName=mProject->executable();
+                mCompileSuccessionTask->execName=mProject->outputFilename();
                 mCompileSuccessionTask->isExecutable=true;
                 mCompileSuccessionTask->binDirs=binDirs;
                 compile(true);
@@ -2259,7 +2510,7 @@ void MainWindow::debug()
                 //mProject->saveAll();
                 mCompileSuccessionTask=std::make_shared<CompileSuccessionTask>();
                 mCompileSuccessionTask->type = CompileSuccessionTaskType::Debug;
-                mCompileSuccessionTask->execName=mProject->executable();
+                mCompileSuccessionTask->execName=mProject->outputFilename();
                 mCompileSuccessionTask->isExecutable=true;
                 mCompileSuccessionTask->binDirs=binDirs;
                 compile();
@@ -2287,7 +2538,7 @@ void MainWindow::debug()
         }
         // Reset UI, remove invalid breakpoints
         prepareDebugger();
-        filePath = mProject->executable();
+        filePath = mProject->outputFilename();
 
 //        mDebugger->setUseUTF8(e->fileEncoding() == ENCODING_UTF8 || e->fileEncoding() == ENCODING_UTF8_BOM);
 
@@ -2296,21 +2547,29 @@ void MainWindow::debug()
                 unitFiles.insert(unit->fileName());
         }
         mDebugger->deleteInvalidProjectBreakpoints(unitFiles);
-        if (!mDebugger->start(mProject->options().compilerSet, filePath, binDirs))
-            return;
-        filePath.replace('\\','/');
-        mDebugger->sendCommand("-file-exec-and-symbols", '"' + filePath + '"');
-
+        bool inferiorHasSymbols { true };
+        QString inferior { filePath };
         if (mProject->options().type == ProjectType::DynamicLib) {
-            QString host =mProject->options().hostApplication;
-            host.replace('\\','/');
-            mDebugger->sendCommand("-file-exec-file", '"' + host + '"');
+            inferior=mProject->options().hostApplication;
+            inferiorHasSymbols = false;
         }
+        inferior.replace('\\','/');
+        if (!mDebugger->startClient(
+                    mProject->options().compilerSet,
+                    inferior,
+                    inferiorHasSymbols,
+                    debugInferiorhasBreakpoint(),
+                    binDirs
+                    ))
+            return;
 
-        includeOrSkipDirs(mProject->options().includeDirs,
-                          pSettings->debugger().skipProjectLibraries());
-        includeOrSkipDirs(mProject->options().libDirs,
-                          pSettings->debugger().skipProjectLibraries());
+        mDebugger->includeOrSkipDirsInSymbolSearch(
+                    mProject->options().includeDirs,
+                    pSettings->debugger().skipProjectLibraries());
+        mDebugger->includeOrSkipDirsInSymbolSearch(
+                    mProject->options().libDirs,
+                    pSettings->debugger().skipProjectLibraries());
+    }
         break;
     case CompileTarget::File: {
             binDirs = compilerSet->binDirs();
@@ -2380,7 +2639,9 @@ void MainWindow::debug()
                     mCompileSuccessionTask->binDirs = binDirs;
                     compile();
                     return;
-                } else if (compareFileModifiedTime(e->filename(),filePath)>=0) {
+                } else if (
+                           compareFileModifiedTime(e->filename(),filePath)>=0
+                           || compareFileModifiedTime(filePath, pSettings->compilerSets().defaultIndexTimestamp())<=0 ) {
                     mCompileSuccessionTask=std::make_shared<CompileSuccessionTask>();
                     mCompileSuccessionTask->type = CompileSuccessionTaskType::Debug;
                     mCompileSuccessionTask->binDirs = binDirs;
@@ -2389,10 +2650,15 @@ void MainWindow::debug()
                 }
 
                 prepareDebugger();
-                QString filePath = debugFile.filePath().replace('\\','/');
-                if (!mDebugger->start(pSettings->compilerSets().defaultIndex(),filePath, binDirs,e->filename()))
+                QString newFilePath = debugFile.filePath().replace('\\','/');
+                if (!mDebugger->startClient(
+                            pSettings->compilerSets().defaultIndex(),
+                            newFilePath,
+                            true,
+                            debugInferiorhasBreakpoint(),
+                            binDirs,
+                            e->filename()))
                     return;
-                mDebugger->sendCommand("-file-exec-and-symbols", QString("\"%1\"").arg(filePath));
             }
         }
         break;
@@ -2404,52 +2670,7 @@ void MainWindow::debug()
 
     updateEditorActions();
 
-    // Add library folders
-    includeOrSkipDirs(compilerSet->libDirs(), pSettings->debugger().skipCustomLibraries());
-    includeOrSkipDirs(compilerSet->CIncludeDirs(), pSettings->debugger().skipCustomLibraries());
-    includeOrSkipDirs(compilerSet->CppIncludeDirs(), pSettings->debugger().skipCustomLibraries());
-
-    //gcc system libraries is auto loaded by gdb
-    if (pSettings->debugger().skipSystemLibraries()) {
-        includeOrSkipDirs(compilerSet->defaultCIncludeDirs(),true);
-        includeOrSkipDirs(compilerSet->defaultCIncludeDirs(),true);
-        includeOrSkipDirs(compilerSet->defaultCppIncludeDirs(),true);
-    }
-
-    mDebugger->sendAllBreakpointsToDebugger();
-
-    // Run the debugger
-    mDebugger->sendCommand("-gdb-set", "mi-async on");
-    mDebugger->sendCommand("-enable-pretty-printing","");
-    mDebugger->sendCommand("-data-list-register-names","");
-    mDebugger->sendCommand("-gdb-set", "width 0"); // don't wrap output, very annoying
-    mDebugger->sendCommand("-gdb-set", "confirm off");
-    mDebugger->sendCommand("-gdb-set", "print repeats 10");
-    mDebugger->sendCommand("-gdb-set", "print null-stop");
-    mDebugger->sendCommand("-gdb-set", QString("print elements %1").arg(pSettings->debugger().arrayElements())); // limit array elements to 500
-    //mDebugger->sendCommand("-environment-cd", QString("\"%1\"").arg(extractFileDir(filePath))); // restore working directory
-    if (pSettings->debugger().useGDBServer()) {
-        mDebugger->sendCommand("-target-select",QString("remote localhost:%1").arg(pSettings->debugger().GDBServerPort()));
-        if (!debugInferiorhasBreakpoint() || !debugEnabled) {
-            mDebugger->sendCommand("-break-insert","-t main");
-        }
-        if (pSettings->executor().useParams()) {
-            mDebugger->sendCommand("-exec-arguments", pSettings->executor().params());
-        }
-        mDebugger->sendCommand("-exec-continue","");
-    } else {
-#ifdef Q_OS_WIN
-        mDebugger->sendCommand("-gdb-set", "new-console on");
-#endif
-        if (pSettings->executor().useParams()) {
-            mDebugger->sendCommand("-exec-arguments", pSettings->executor().params());
-        }
-        if (!debugInferiorhasBreakpoint()) {
-            mDebugger->sendCommand("-exec-run","--start");
-        } else {
-            mDebugger->sendCommand("-exec-run","");
-        }
-    }
+    mDebugger->runInferior();
 }
 
 void MainWindow::showSearchPanel(bool showReplace)
@@ -2509,7 +2730,7 @@ void MainWindow::prepareDebugger()
     // Clear logs
     ui->debugConsole->clear();
     if (pSettings->debugger().enableDebugConsole()) {
-        ui->debugConsole->addLine("(gdb) ");
+        ui->debugConsole->addLine("(gdb)");
     }
     ui->txtEvalOutput->clear();
 
@@ -2576,22 +2797,19 @@ void MainWindow::createCustomActions()
     // action for problem set
     mProblemSet_New = createAction(
                 tr("New Problem Set"),
-                ui->tabProblemSet
-                );
+                ui->tabProblemSet);
     connect(mProblemSet_New,&QAction::triggered,
             this, &MainWindow::onNewProblemSet);
 
     mProblemSet_Rename = createAction(
                 tr("Rename Problem Set"),
-                ui->tabProblemSet
-                );
+                ui->tabProblemSet);
     connect(mProblemSet_Rename, &QAction::triggered,
             this, &MainWindow::onRenameProblemSet);
 
     mProblemSet_Save = createAction(
                 tr("Save Problem Set"),
-                ui->tabProblemSet
-                );
+                ui->tabProblemSet);
     connect(mProblemSet_Save,&QAction::triggered,
             this, &MainWindow::onSaveProblemSet);
 
@@ -2625,26 +2843,22 @@ void MainWindow::createCustomActions()
     connect(mProblemSet_RemoveProblem,&QAction::triggered,
             this, &MainWindow::onRemoveProblem);
 
-
     //problem
     mProblem_OpenSource=createAction(
                 tr("Open Source File"),
-                ui->tabProblemSet
-                );
+                ui->tabProblemSet);
     connect(mProblem_OpenSource, &QAction::triggered, this,
             &MainWindow::onProblemOpenSource);
 
     mProblem_Rename=createAction(
                 tr("Rename Problem"),
-                ui->tabProblemSet
-                );
+                ui->tabProblemSet);
     connect(mProblem_Rename, &QAction::triggered, this,
             &MainWindow::onProblemRename);
 
     mProblem_GotoUrl=createAction(
                 tr("Goto Url"),
-                ui->tabProblemSet
-                );
+                ui->tabProblemSet);
     connect(mProblem_GotoUrl, &QAction::triggered, this,
             &MainWindow::onProblemGotoUrl);
 
@@ -2681,21 +2895,24 @@ void MainWindow::createCustomActions()
             &MainWindow::onOpenCaseValidationOptions);
 
     // problem case run
-    mProblem_RunAllCases = createShortcutCustomableAction(
+    mProblem_RunAllCases = createGlobalAction(
                 tr("Run All Cases"),
-                "Problem_RunAllCases");
+                "Problem_RunAllCases",
+                tr("Problem"));
     connect(mProblem_RunAllCases, &QAction::triggered, this,
             &MainWindow::onProblemRunAllCases);
 
-    mProblem_RunCurrentCase = createShortcutCustomableAction(
+    mProblem_RunCurrentCase = createGlobalAction(
                 tr("Run Current Case"),
-                "Problem_RunCurrentCases");
+                "Problem_RunCurrentCases",
+                tr("Problem"));
     connect(mProblem_RunCurrentCase, &QAction::triggered, this,
             &MainWindow::onProblemRunCurrentCase);
 
-    mProblem_batchSetCases = createShortcutCustomableAction(
+    mProblem_batchSetCases = createGlobalAction(
                 tr("Batch Set Cases"),
-                "Problem_BatchSetCases");
+                "Problem_BatchSetCases",
+                tr("Problem"));
     connect(mProblem_batchSetCases, &QAction::triggered, this,
             &MainWindow::onProblemBatchSetCases);
 
@@ -2742,7 +2959,8 @@ void MainWindow::createCustomActions()
 
     mDebugConsole_SelectAll=createAction(
                 tr("Select All"),
-                ui->debugConsole);
+                ui->debugConsole,
+                QKeySequence("Ctrl+A"));
     connect(mDebugConsole_SelectAll, &QAction::triggered,
             this, &MainWindow::onDebugConsoleSelectAll);
 
@@ -2791,7 +3009,7 @@ void MainWindow::createCustomActions()
                 tr("Breakpoint condition..."),
                 ui->tblBreakpoints);
     connect(mBreakpointViewPropertyAction,&QAction::triggered,
-            this, &MainWindow::onBreakpointViewProperty);
+            this, &MainWindow::onModifyBreakpointCondition);
 
     mBreakpointViewRemoveAllAction = createAction(
                 tr("Remove All Breakpoints"),
@@ -2844,17 +3062,14 @@ void MainWindow::createCustomActions()
                 tr("Sort By Type"),
                 ui->tabStructure);
     mClassBrowser_Sort_By_Type->setCheckable(true);
-    mClassBrowser_Sort_By_Type->setIcon(QIcon(":/icons/images/newlook24/077-sort-type.png"));
     mClassBrowser_Sort_By_Name = createAction(
                 tr("Sort alphabetically"),
                 ui->tabStructure);
     mClassBrowser_Sort_By_Name->setCheckable(true);
-    mClassBrowser_Sort_By_Name->setIcon(QIcon(":/icons/images/newlook24/076-sort-alpha.png"));
     mClassBrowser_Show_Inherited = createAction(
                 tr("Show inherited members"),
                 ui->tabStructure);
     mClassBrowser_Show_Inherited->setCheckable(true);
-    mClassBrowser_Show_Inherited->setIcon(QIcon(":/icons/images/newlook24/075-show-inheritance.png"));
     mClassBrowser_goto_declaration = createAction(
                 tr("Goto declaration"),
                 ui->tabStructure);
@@ -2914,13 +3129,19 @@ void MainWindow::createCustomActions()
 
     mFilesView_RemoveFile = createAction(
                 tr("Delete"),
-                ui->treeFiles);
-    mFilesView_RemoveFile->setShortcut(Qt::Key_Delete);
+                ui->treeFiles,
+                Qt::Key_Delete,
+                Qt::WidgetShortcut);
     connect(mFilesView_RemoveFile, &QAction::triggered,
             this, &MainWindow::onFilesViewRemoveFiles);
+
     mFilesView_Open = createAction(
                 tr("Open in Editor"),
-                ui->treeFiles);
+                ui->treeFiles,
+                Qt::Key_Return,
+                Qt::WidgetShortcut);
+    mFilesView_Open->setShortcuts(
+                {Qt::Key_Return, Qt::Key_Enter});
     connect(mFilesView_Open, &QAction::triggered,
             this, &MainWindow::onFilesViewOpen);
 
@@ -2929,12 +3150,14 @@ void MainWindow::createCustomActions()
                 ui->treeFiles);
     connect(mFilesView_OpenWithExternal, &QAction::triggered,
             this, &MainWindow::onFilesViewOpenWithExternal);
+
     mFilesView_OpenInTerminal = createAction(
                 tr("Open in Terminal"),
                 ui->treeFiles);
     mFilesView_OpenInTerminal->setIcon(ui->actionOpen_Terminal->icon());
     connect(mFilesView_OpenInTerminal, &QAction::triggered,
             this, &MainWindow::onFilesViewOpenInTerminal);
+
     mFilesView_OpenInExplorer = createAction(
                 tr("Open in Windows Explorer"),
                 ui->treeFiles);
@@ -2950,13 +3173,14 @@ void MainWindow::createCustomActions()
             this, &MainWindow::onToolsOutputClear);
     mToolsOutput_Copy = createAction(
                 tr("Copy"),
-                ui->txtToolsOutput);
-    mToolsOutput_Copy->setShortcut(QKeySequence("Ctrl+C"));
+                ui->txtToolsOutput,
+                QKeySequence("Ctrl+C"));
     connect(mToolsOutput_Copy, &QAction::triggered,
             this, &MainWindow::onToolsOutputCopy);
     mToolsOutput_SelectAll = createAction(
                 tr("Select All"),
-                ui->txtToolsOutput);
+                ui->txtToolsOutput,
+                QKeySequence("Ctrl+A"));
     connect(mToolsOutput_SelectAll, &QAction::triggered,
             this, &MainWindow::onToolsOutputSelectAll);
 }
@@ -3051,20 +3275,23 @@ void MainWindow::initToolButtons()
 QAction* MainWindow::createAction(
         const QString& text,
         QWidget* parent,
-        QKeySequence shortcut) {
+        QKeySequence shortcut,
+        Qt::ShortcutContext shortcutContext) {
     QAction* action= new QAction(text,parent);
     if (!shortcut.isEmpty())
         action->setShortcut(shortcut);
     action->setPriority(QAction::HighPriority);
-    action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    action->setShortcutContext(shortcutContext);
     parent->addAction(action);
     return action;
 }
 
-QAction *MainWindow::createShortcutCustomableAction(const QString &text, const QString &objectName, QKeySequence shortcut)
+QAction *MainWindow::createGlobalAction(const QString &text, const QString &objectName, const QString &groupName, QKeySequence shortcut)
 {
     QAction* action = createAction(text,this,shortcut);
     action->setObjectName(objectName);
+    action->setShortcutContext(Qt::WindowShortcut);
+    action->setData(groupName);
     return action;
 }
 
@@ -3085,24 +3312,6 @@ void MainWindow::scanActiveProject(bool parse)
     } else {
         mProject->resetParserProjectFiles();
     };
-}
-
-void MainWindow::includeOrSkipDirs(const QStringList &dirs, bool skip)
-{
-    Q_ASSERT(mDebugger);
-    foreach (QString dir,dirs) {
-        QString dirName = dir.replace('\\','/');
-        if (skip) {
-            mDebugger->sendCommand(
-                        "skip",
-                        QString("-gfi \"%1/%2\"")
-                        .arg(dirName,"*.*"));
-        } else {
-            mDebugger->sendCommand(
-                        "-environment-directory",
-                        QString("\"%1\"").arg(dirName));
-        }
-    }
 }
 
 void MainWindow::onBookmarkContextMenu(const QPoint &pos)
@@ -3149,8 +3358,8 @@ bool MainWindow::saveLastOpens()
       fileObj["focused"] = editor->hasFocus();
       fileObj["caretX"] = editor->caretX();
       fileObj["caretY"] = editor->caretY();
-      fileObj["topLine"] = editor->topLine();
-      fileObj["leftChar"] = editor->leftChar();
+      fileObj["top"] = editor->topPos();
+      fileObj["left"] = editor->leftPos();
       filesArray.append(fileObj);
     }
     rootObj["files"]=filesArray;
@@ -3181,6 +3390,10 @@ bool MainWindow::saveLastOpens()
 
 void MainWindow::loadLastOpens()
 {
+    mOpeningFiles=true;
+    auto action=finally([this]{
+        mOpeningFiles=false;
+    });
     QString filename = includeTrailingPathDelimiter(pSettings->dirs().config()) + DEV_LASTOPENS_FILE;
     if (!fileExists(filename))
         return;
@@ -3247,11 +3460,11 @@ void MainWindow::loadLastOpens()
         pos.ch = fileObj["caretX"].toInt(1);
         pos.line = fileObj["caretY"].toInt(1);
         editor->setCaretXY(pos);
-        editor->setTopLine(
-                    fileObj["topLine"].toInt(1)
+        editor->setTopPos(
+                    fileObj["top"].toInt(1)
                     );
-        editor->setLeftChar(
-                    fileObj["leftChar"].toInt(1)
+        editor->setLeftPos(
+                    fileObj["left"].toInt(1)
                     );
         if (fileObj["focused"].toBool(false))
             focusedEditor = editor;
@@ -3267,76 +3480,69 @@ void MainWindow::loadLastOpens()
         updateEditorActions();
         //updateForEncodingInfo();
     }
-    if (focusedEditor)
+    if (!focusedEditor) {
+        focusedEditor = mEditorList->getEditor();
+    }
+    if (focusedEditor) {
+        focusedEditor->reparse(false);
+        focusedEditor->checkSyntaxInBack();
+        focusedEditor->reparseTodo();
         focusedEditor->activate();
+    }
 }
 
 void MainWindow::updateTools()
 {
+    QList<QAction*> oldToolActions;
+    //save old custom tools actions.
+    foreach(QAction* action, ui->menuTools->actions()) {
+        if (action->objectName().startsWith("tool-"))
+            oldToolActions.append(action);
+    }
     ui->menuTools->clear();
+    //delete old custom tools actions;
+    for(int i=0;i<oldToolActions.length();i++) {
+        delete oldToolActions[i];
+    }
     ui->menuTools->addAction(ui->actionOptions);
     if (!mToolsManager->tools().isEmpty()) {
         ui->menuTools->addSeparator();
+        QList<QAction*> actions;
         foreach (const PToolItem& item, mToolsManager->tools()) {
-            QAction* action = new QAction(item->title,ui->menuTools);
+            QAction* action = createGlobalAction(item->title,"tool-"+item->id, tr("Tools"));
             connect(action, &QAction::triggered,
-                    [item] (){
-                QString program = parseMacros(item->program);
-                QString workDir = parseMacros(item->workingDirectory);
-                QString params = parseMacros(item->parameters);
-                if (!program.endsWith(".bat",Qt::CaseInsensitive)) {
-                    QTemporaryFile file(QDir::tempPath()+QDir::separator()+"XXXXXX.bat");
-                    file.setAutoRemove(false);
-                    if (file.open()) {
-                        file.write(QString("cd /d \"%1\"")
-                                   .arg(localizePath(workDir))
-                                   .toLocal8Bit()+LINE_BREAKER);
-                        file.write((program+" "+params).toLocal8Bit()
-                                   + LINE_BREAKER);
-                        file.close();
-                        if (item->pauseAfterExit) {
-                            executeFile(
-                                        includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+CONSOLE_PAUSER,
-                                        " 1 \""+localizePath(file.fileName())+"\" ",
-                                        workDir, file.fileName());
-                        } else {
-                            executeFile(
-                                        file.fileName(),
-                                        "",
-                                        workDir, file.fileName());
-                        }
-                    }
-                } else {
-                    if (item->pauseAfterExit) {
-                        executeFile(
-                                    includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+CONSOLE_PAUSER,
-                                    " 1 \""+program+"\" "+params,
-                                    workDir, "");
-                    } else {
-                        executeFile(
-                                    program,
-                                    params,
-                                    workDir, "");
-                    }
-                }
-
+                    [item,this] (){
+                executeTool(item);
             });
             ui->menuTools->addAction(action);
+            actions.append(action);
         }
+        ShortcutManager shortcutManager;
+        shortcutManager.load();
+        shortcutManager.applyTo(actions);
     }
 }
 
 void MainWindow::newEditor(const QString& suffix)
 {
     try {
-        QString filename=QString("untitled%1").arg(getNewFileNumber());
-        if (suffix.isEmpty()) {
-            if (pSettings->editor().defaultFileCpp())
-                filename+=".cpp";
-            else
-                filename+=".c";
-        } else
-            filename+= "." + suffix;
+        QString filename;
+        do {
+            filename = QString("untitled%1").arg(getNewFileNumber());
+            if (suffix.isEmpty()) {
+                if (pSettings->editor().defaultFileCpp()) {
+                    Settings::PCompilerSet compilerSet = pSettings->compilerSets().defaultSet();
+                    if (compilerSet && !compilerSet->canCompileCPP()) {
+                        filename+=".c";
+                    } else {
+                        filename+=".cpp";
+                    }
+                } else
+                    filename+=".c";
+            } else
+                filename+= "." + suffix;
+
+        } while(mEditorList->hasFilename(filename));
         Editor * editor=mEditorList->newEditor(filename,
                                                pSettings->editor().defaultEncoding(),
                                                nullptr,true);
@@ -3468,7 +3674,7 @@ void MainWindow::buildEncodingMenu()
         });
     }
 
-    mMenuEncoding = new QMenu();
+    mMenuEncoding = new QMenu(this);
     mMenuEncoding->setTitle(tr("File Encoding"));
     mMenuEncoding->addAction(ui->actionAuto_Detect);
     mMenuEncoding->addAction(ui->actionEncode_in_ANSI);
@@ -3558,7 +3764,6 @@ void MainWindow::openShell(const QString &folder, const QString &shellCommand, c
         args->flags |= CREATE_NEW_CONSOLE;
         args->startupInfo->dwFlags &=  ~STARTF_USESTDHANDLES; //
     });
-#endif
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     QString path = env.value("PATH");
     QStringList pathAdded;
@@ -3571,6 +3776,7 @@ void MainWindow::openShell(const QString &folder, const QString &shellCommand, c
     }
     env.insert("PATH",path);
     process.setProcessEnvironment(env);
+#endif
     process.startDetached();
 }
 
@@ -3683,12 +3889,14 @@ void MainWindow::onProjectViewContextMenu(const QPoint &pos)
             onRoot = true;
         }
     }
-    GitManager vcsManager;
-    QString branch;
-    bool hasRepository = vcsManager.hasRepository(mProject->folder(),branch);
 
     QMenu menu(this);
+#ifdef ENABLE_VCS
     QMenu vcsMenu(this);
+    QString branch;
+    GitManager vcsManager;
+    bool hasRepository = vcsManager.hasRepository(mProject->folder(),branch);
+#endif
     updateProjectActions();
     menu.addAction(ui->actionProject_New_File);
     menu.addAction(ui->actionNew_Class);
@@ -3701,6 +3909,7 @@ void MainWindow::onProjectViewContextMenu(const QPoint &pos)
         menu.addAction(mProject_Rename_Unit);
     }
     menu.addSeparator();
+#ifdef ENABLE_VCS
     if (pSettings->vcs().gitOk()) {
         if (hasRepository) {
             menu.addMenu(&vcsMenu);
@@ -3710,6 +3919,7 @@ void MainWindow::onProjectViewContextMenu(const QPoint &pos)
         }
         menu.addSeparator();
     }
+#endif
     if (onFolder && mProject->modelType()==ProjectModelType::Custom) {
         menu.addAction(mProject_Add_Folder);
         if (!onRoot) {
@@ -3732,6 +3942,7 @@ void MainWindow::onProjectViewContextMenu(const QPoint &pos)
     menu.addSeparator();
     menu.addAction(ui->actionClose_Project);
 
+#ifdef ENABLE_VCS
     if (pSettings->vcs().gitOk() && hasRepository) {
         mProject->model()->iconProvider()->update();
         vcsMenu.setTitle(tr("Version Control"));
@@ -3770,7 +3981,8 @@ void MainWindow::onProjectViewContextMenu(const QPoint &pos)
         vcsMenu.addAction(ui->actionGit_Commit);
         vcsMenu.addAction(ui->actionGit_Restore);
 
-        bool canBranch = !mProject->model()->iconProvider()->VCSRepository()->hasChangedFiles()
+        bool canBranch = false;
+        canBranch = !mProject->model()->iconProvider()->VCSRepository()->hasChangedFiles()
                 && !mProject->model()->iconProvider()->VCSRepository()->hasStagedFiles();
         ui->actionGit_Branch->setEnabled(canBranch);
         ui->actionGit_Merge->setEnabled(canBranch);
@@ -3784,6 +3996,7 @@ void MainWindow::onProjectViewContextMenu(const QPoint &pos)
 //        ui->actionGit_Reset->setEnabled(true);
 //        ui->actionGit_Revert->setEnabled(true);
     }
+#endif
     menu.exec(ui->projectView->mapToGlobal(pos));
 }
 
@@ -3843,16 +4056,19 @@ void MainWindow::onDebugConsoleContextMenu(const QPoint &pos)
 
 void MainWindow::onFileEncodingContextMenu(const QPoint &pos)
 {
-    mMenuEncoding->exec(mFileEncodingStatus->mapToGlobal(pos));
+    if (mMenuEncoding->isEnabled())
+        mMenuEncoding->exec(mFileEncodingStatus->mapToGlobal(pos));
 }
 
 void MainWindow::onFilesViewContextMenu(const QPoint &pos)
 {
+    QMenu menu(this);
+#ifdef ENABLE_VCS
     GitManager vcsManager;
     QString branch;
     bool hasRepository = vcsManager.hasRepository(pSettings->environment().currentFolder(),branch);
-    QMenu menu(this);
     QMenu vcsMenu(this);
+#endif
     menu.addAction(ui->actionOpen_Folder);
     menu.addSeparator();
     menu.addAction(mFilesView_CreateFolder);
@@ -3860,6 +4076,7 @@ void MainWindow::onFilesViewContextMenu(const QPoint &pos)
     menu.addAction(mFilesView_RemoveFile);
     menu.addAction(mFilesView_Rename);
     menu.addSeparator();
+#ifdef ENABLE_VCS
     if (pSettings->vcs().gitOk()) {
         if (hasRepository) {
             menu.addMenu(&vcsMenu);
@@ -3869,6 +4086,7 @@ void MainWindow::onFilesViewContextMenu(const QPoint &pos)
         }
         menu.addSeparator();
     }
+#endif
     menu.addAction(mFilesView_Open);
     menu.addAction(mFilesView_OpenWithExternal);
     menu.addSeparator();
@@ -3885,6 +4103,7 @@ void MainWindow::onFilesViewContextMenu(const QPoint &pos)
     mFilesView_Rename->setEnabled(!path.isEmpty());
     mFilesView_RemoveFile->setEnabled(!path.isEmpty() || !ui->treeFiles->selectionModel()->selectedRows().isEmpty());
 
+#ifdef ENABLE_VCS
     if (pSettings->vcs().gitOk() && hasRepository) {
         mFileSystemModelIconProvider.update();
         vcsMenu.setTitle(tr("Version Control"));
@@ -3926,6 +4145,7 @@ void MainWindow::onFilesViewContextMenu(const QPoint &pos)
 //        ui->actionGit_Reset->setEnabled(true);
 //        ui->actionGit_Revert->setEnabled(true);
     }
+#endif
     menu.exec(ui->treeFiles->mapToGlobal(pos));
 }
 
@@ -4176,80 +4396,21 @@ void MainWindow::onProblemBatchSetCases()
     }
 }
 
-void MainWindow::onNewProblemConnection()
+void MainWindow::onNewProblemReceived(int num, int total, POJProblem newProblem)
 {
-    QTcpSocket* clientConnection = mTcpServer.nextPendingConnection();
-
-    connect(clientConnection, &QAbstractSocket::disconnected,
-            clientConnection, &QObject::deleteLater);
-    QByteArray content;
-    int unreadCount = 0;
-    while (clientConnection->state() == QTcpSocket::ConnectedState) {
-        clientConnection->waitForReadyRead(100);
-        QByteArray readed = clientConnection->readAll();
-        if (readed.isEmpty()) {
-            unreadCount ++;
-            if (!content.isEmpty() || unreadCount>30)
-                break;
-        } else {
-            unreadCount = 0;
-        }
-        content += readed;
-    }
-    content += clientConnection->readAll();
-    clientConnection->write("HTTP/1.1 200 OK");
-    clientConnection->disconnectFromHost();
-//    qDebug()<<"---------";
-//    qDebug()<<content;
-    content = getHTTPBody(content);
-//    qDebug()<<"*********";
-//    qDebug()<<content;
-    if (content.isEmpty()) {
+    if (mOJProblemSetModel.problemNameUsed(newProblem->name))
         return;
-    }
-    QJsonParseError error;
-    QJsonDocument doc = QJsonDocument::fromJson(content,&error);
-    if (error.error!=QJsonParseError::NoError) {
-        qDebug()<<"Read http content failed!";
-        qDebug()<<error.errorString();
-        return;
-    }
-    QJsonObject obj=doc.object();
-    QString name = obj["name"].toString();
-    if (!mOJProblemSetModel.problemNameUsed(name)) {
-        POJProblem problem = std::make_shared<OJProblem>();
-        problem->name = name;
-        problem->url = obj["url"].toString();
-        QJsonArray caseArray = obj["tests"].toArray();
-        foreach ( const QJsonValue& val, caseArray) {
-            QJsonObject caseObj = val.toObject();
-            POJProblemCase problemCase = std::make_shared<OJProblemCase>();
-            problemCase->testState = ProblemCaseTestState::NotTested;
-            problemCase->name = tr("Problem Case %1").arg(problem->cases.count()+1);
-            if (pSettings->executor().convertHTMLToTextForInput()) {
-                QTextDocument doc;
-                doc.setHtml(caseObj["input"].toString());
-                problemCase->input = doc.toPlainText();
-            } else
-                problemCase->input = caseObj["input"].toString();
-            if (pSettings->executor().convertHTMLToTextForExpected()) {
-                QTextDocument doc;
-                doc.setHtml(caseObj["output"].toString());
-                problemCase->expected = doc.toPlainText();
-            } else
-                problemCase->expected = caseObj["output"].toString();
-            problem->cases.append(problemCase);
-        }
-        mOJProblemSetModel.addProblem(problem);
-        ui->tabExplorer->setCurrentWidget(ui->tabProblemSet);
-        ui->lstProblemSet->setCurrentIndex(mOJProblemSetModel.index(
-                                               mOJProblemSetModel.count()-1
-                                               ,0));
-        if (isMinimized())
-            showNormal();
-        raise(); // for mac OS?
-        activateWindow();
-    }
+    updateStatusbarMessage(tr("Problem '%1' received (%2/%3).")
+                              .arg(newProblem->name).arg(num).arg(total));
+    mOJProblemSetModel.addProblem(newProblem);
+    ui->tabExplorer->setCurrentWidget(ui->tabProblemSet);
+    ui->lstProblemSet->setCurrentIndex(mOJProblemSetModel.index(
+                                           mOJProblemSetModel.count()-1
+                                           ,0));
+    if (isMinimized())
+        showNormal();
+    raise(); // for mac OS?
+    activateWindow();
 }
 
 void MainWindow::updateProblemTitle()
@@ -4324,15 +4485,17 @@ void MainWindow::onShowInsertCodeSnippetMenu()
 void MainWindow::onFilesViewCreateFolderFolderLoaded(const QString& path)
 {
 
-    if (mFilesViewNewCreatedFolder.isEmpty())
+    if (mFilesViewNewCreatedFolder.isEmpty() && mFilesViewNewCreatedFile.isEmpty())
         return;
 
-    if (path!=extractFilePath(mFilesViewNewCreatedFolder))
+    if (path!=extractFilePath(mFilesViewNewCreatedFolder) && path!=extractFilePath(mFilesViewNewCreatedFile))
         return;
 
     disconnect(&mFileSystemModel,&QFileSystemModel::directoryLoaded,
             this,&MainWindow::onFilesViewCreateFolderFolderLoaded);
-    QModelIndex newIndex = mFileSystemModel.index(mFilesViewNewCreatedFolder);
+
+    QModelIndex newIndex = mFileSystemModel.index(mFilesViewNewCreatedFolder.isEmpty() ? mFilesViewNewCreatedFile : mFilesViewNewCreatedFolder);
+
     if (newIndex.isValid()) {
         ui->treeFiles->setCurrentIndex(newIndex);
         ui->treeFiles->edit(newIndex);
@@ -4390,7 +4553,6 @@ void MainWindow::onFilesViewCreateFile()
             dir = QDir(mFileSystemModel.fileInfo(index).absoluteFilePath());
         else
             dir = mFileSystemModel.fileInfo(index).absoluteDir();
-        ui->treeFiles->expand(index);
     } else {
         dir = mFileSystemModel.rootDirectory();
     }
@@ -4407,8 +4569,12 @@ void MainWindow::onFilesViewCreateFile()
     }
     QFile file(dir.filePath(fileName));
     file.open(QFile::NewOnly);
-    QModelIndex newIndex = mFileSystemModel.index(fileName);
-    ui->treeFiles->setCurrentIndex(newIndex);
+    file.close();
+    QModelIndex newIndex = mFileSystemModel.index(dir.filePath(fileName));
+    connect(&mFileSystemModel,&QFileSystemModel::directoryLoaded,
+            this,&MainWindow::onFilesViewCreateFolderFolderLoaded);
+    ui->treeFiles->expand(index);
+    mFilesViewNewCreatedFile=mFileSystemModel.filePath(newIndex);
 }
 
 
@@ -4576,6 +4742,16 @@ void MainWindow::onDebugConsoleCopy()
 void MainWindow::onDebugConsoleClear()
 {
     ui->debugConsole->clear();
+    if (pSettings->debugger().enableDebugConsole()) {
+        ui->debugConsole->addLine("(gdb)");
+    }
+}
+
+void MainWindow::onBreakpointTableDoubleClicked(const QModelIndex &index)
+{
+    if (index.isValid() && index.column()==2) {
+        modifyBreakpointCondition(index.row());
+    }
 }
 
 void MainWindow::onFilesViewOpenInExplorer()
@@ -4594,7 +4770,7 @@ void MainWindow::onFilesViewOpenInTerminal()
 #ifdef Q_OS_WIN
         openShell(fileInfo.path(),"cmd.exe",getDefaultCompilerSetBinDirs());
 #else
-        openShell(fileInfo.path(),pSettings->environment().terminalPathForExec(),getDefaultCompilerSetBinDirs());
+        openShell(fileInfo.path(),pSettings->environment().terminalPath(),getDefaultCompilerSetBinDirs());
 #endif
     }
 }
@@ -4842,25 +5018,11 @@ void MainWindow::onBreakpointViewRemoveAll()
     }
 }
 
-void MainWindow::onBreakpointViewProperty()
+void MainWindow::onModifyBreakpointCondition()
 {
     int index =ui->tblBreakpoints->selectionModel()->currentIndex().row();
 
-    PBreakpoint breakpoint = debugger()->breakpointModel()->breakpoint(
-                index,
-                debugger()->isForProject()
-                );
-    if (breakpoint) {
-        bool isOk;
-        QString s=QInputDialog::getText(this,
-                                  tr("Break point condition"),
-                                  tr("Enter the condition of the breakpoint:"),
-                                QLineEdit::Normal,
-                                breakpoint->condition,&isOk);
-        if (isOk) {
-            pMainWindow->debugger()->setBreakPointCondition(index,s,debugger()->isForProject());
-        }
-    }
+    modifyBreakpointCondition(index);
 }
 
 void MainWindow::onSearchViewClearAll()
@@ -4915,12 +5077,11 @@ void MainWindow::onEditorContextMenu(const QPoint& pos)
             );
     QMenu menu(this);
     QSynedit::BufferCoord p;
-    mEditorContextMenuPos = pos;
     int line;
     if (editor->getPositionOfMouse(p)) {
-        line=p.line;
+        if (!editor->getLineOfMouse(line))
+            line=-1;
         if (!switchHeaderSourceTarget(editor).isEmpty()) {
-
             menu.addAction(ui->actionSwitchHeaderSource);
             menu.addSeparator();
         }
@@ -4953,11 +5114,11 @@ void MainWindow::onEditorContextMenu(const QPoint& pos)
             menu.addAction(ui->actionAdd_Watch);
             menu.addAction(ui->actionAdd_Watchpoint);
             menu.addAction(ui->actionToggle_Breakpoint);
+            menu.addAction(ui->actionBreakpoint_property);
             menu.addAction(ui->actionClear_all_breakpoints);
             menu.addSeparator();
         }
-        menu.addAction(ui->actionAdd_bookmark);
-        menu.addAction(ui->actionRemove_Bookmark);
+        menu.addAction(ui->actionToggle_Bookmark);
         menu.addAction(ui->actionModify_Bookmark_Description);
         menu.addSeparator();
         menu.addAction(ui->actionGo_to_Line);
@@ -4965,7 +5126,6 @@ void MainWindow::onEditorContextMenu(const QPoint& pos)
         menu.addAction(ui->actionFile_Properties);
     } else {
         //mouse on gutter
-
         if (!editor->getLineOfMouse(line))
             line=-1;
         if (canDebug) {
@@ -4974,19 +5134,16 @@ void MainWindow::onEditorContextMenu(const QPoint& pos)
             menu.addAction(ui->actionClear_all_breakpoints);
             menu.addSeparator();
         }
-        menu.addAction(ui->actionAdd_bookmark);
-        menu.addAction(ui->actionRemove_Bookmark);
+        menu.addAction(ui->actionToggle_Bookmark);
         menu.addAction(ui->actionModify_Bookmark_Description);
         menu.addSeparator();
         menu.addAction(ui->actionGo_to_Line);
     }
     ui->actionLocate_in_Files_View->setEnabled(!editor->isNew());
     ui->actionBreakpoint_property->setEnabled(editor->hasBreakpoint(line));
-    ui->actionAdd_bookmark->setEnabled(
-                line>=0 && editor->document()->count()>0
-                && !editor->hasBookmark(line)
+    ui->actionToggle_Bookmark->setEnabled(
+                line>=0 && editor->lineCount()>0
                 );
-    ui->actionRemove_Bookmark->setEnabled(editor->hasBookmark(line));
     ui->actionModify_Bookmark_Description->setEnabled(editor->hasBookmark(line));
     menu.exec(editor->viewport()->mapToGlobal(pos));
 }
@@ -5036,6 +5193,7 @@ void MainWindow::onEditorTabContextMenu(QTabWidget* tabWidget, const QPoint &pos
 
 void MainWindow::disableDebugActions()
 {
+    ui->actionInterrupt->setVisible(mDebugger && mDebugger->useDebugServer());
     ui->actionInterrupt->setEnabled(false);
     ui->actionStep_Into->setEnabled(false);
     ui->actionStep_Over->setEnabled(false);
@@ -5052,8 +5210,8 @@ void MainWindow::disableDebugActions()
 
 void MainWindow::enableDebugActions()
 {
-    if (pSettings->debugger().useGDBServer())
-        ui->actionInterrupt->setEnabled(mDebugger->inferiorRunning());
+    ui->actionInterrupt->setVisible(mDebugger->useDebugServer());
+    ui->actionInterrupt->setEnabled(mDebugger->useDebugServer() && mDebugger->inferiorRunning());
     ui->actionStep_Into->setEnabled(!mDebugger->inferiorRunning());
     ui->actionStep_Over->setEnabled(!mDebugger->inferiorRunning());
     ui->actionStep_Out->setEnabled(!mDebugger->inferiorRunning());
@@ -5294,7 +5452,11 @@ void MainWindow::onFileChanged(const QString &path)
                                       QMessageBox::Yes|QMessageBox::No,
                                       QMessageBox::No) == QMessageBox::Yes) {
                 try {
+                    int top = e->topPos();
+                    QSynedit::BufferCoord caretPos = e->caretXY();
                     e->loadFile();
+                    e->setCaretPositionAndActivate(caretPos.line,1);
+                    e->setTopPos(top);
                 } catch(FileError e) {
                     QMessageBox::critical(this,tr("Error"),e.reason());
                 }
@@ -5392,7 +5554,8 @@ void MainWindow::on_actionNew_triggered()
         if (QMessageBox::question(this,
                                   tr("New Project File?"),
                                   tr("Do you want to add the new file to the project?"),
-                                  QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::Yes) == QMessageBox::Yes) {
             if (mProject->options().isCpp)
                 newProjectUnitFile("cpp");
             else
@@ -5418,6 +5581,18 @@ void MainWindow::on_EditorTabsRight_tabCloseRequested(int index)
 void MainWindow::onFileSystemModelLayoutChanged()
 {
     ui->treeFiles->scrollTo(ui->treeFiles->currentIndex(),QTreeView::PositionAtCenter);
+}
+
+void MainWindow::onFileRenamedInFileSystemModel(const QString &path, const QString &oldName, const QString &newName)
+{
+    QDir folder(path);
+    QString oldFile = folder.absoluteFilePath(oldName);
+    QString newFile = folder.absoluteFilePath(newName);
+
+    Editor *e = mEditorList->getOpenedEditorByFilename(oldFile);
+    if (e) {
+        e->setFilename(newFile);
+    }
 }
 
 void MainWindow::on_actionOpen_triggered()
@@ -5525,7 +5700,7 @@ void MainWindow::closeEvent(QCloseEvent *event) {
             return ;
         }
     } /*else {
-        //if don't save last open files, close project before editors, to save project openned editors;
+        //if don't save last open files, close project before editors, to save project opened editors;
 
     }*/
     if (mProject) {
@@ -5547,7 +5722,7 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 //        }
 //    }
 
-    mTcpServer.close();
+    mCCHandler.stop();
     mCompilerManager->stopAllRunners();
     mCompilerManager->stopCompile();
     mCompilerManager->stopRun();
@@ -5692,20 +5867,16 @@ void MainWindow::onCompileIssue(PCompileIssue issue)
         return;
     ui->tableIssues->addIssue(issue);
 
-    // Update tab caption
-//    if CompilerOutput.Items.Count = 1 then
-//      CompSheet.Caption := Lang[ID_SHEET_COMP] + ' (' + IntToStr(CompilerOutput.Items.Count) + ')';
-
     if (issue->type == CompileIssueType::Error || issue->type ==
             CompileIssueType::Warning) {
         Editor* e = mEditorList->getOpenedEditorByFilename(issue->filename);
         if (e!=nullptr && (issue->line>0)) {
             int line = issue->line;
-            if (line > e->document()->count())
+            if (line > e->lineCount())
                 return;
-            int col = std::min(issue->column,e->document()->getLine(line-1).length()+1);
+            int col = std::min(issue->column,e->lineText(line).length()+1);
             if (col < 1)
-                col = e->document()->getLine(line-1).length()+1;
+                col = e->lineText(line).length()+1;
             e->addSyntaxIssues(line,col,issue->endColumn,issue->type,issue->description);
         }
     }
@@ -5827,8 +5998,8 @@ void MainWindow::onCompileFinished(QString filename, bool isCheckSyntax)
                         int line = e->caretY();
                         int startLine = 1;
                         QString s = "# "+e->filename()+":";
-                        for(int i=0;i<editor->document()->count();i++) {
-                            QString t=editor->document()->getLine(i).trimmed();
+                        for(int i=1;i<=editor->lineCount();i++) {
+                            QString t=editor->lineText(i).trimmed();
                             if (t.startsWith(s,PATH_SENSITIVITY)) {
                                 t=t.mid(s.length());
                                 int pos = t.indexOf(":");
@@ -5838,7 +6009,7 @@ void MainWindow::onCompileFinished(QString filename, bool isCheckSyntax)
                                     int l=numstring.toInt(&isOk);
                                     if (isOk) {
                                         if (l<=line)
-                                            startLine=i+1;
+                                            startLine=i;
                                         if (l>=line)
                                             break;
                                     }
@@ -5975,7 +6146,7 @@ void MainWindow::onOJProblemCaseFinished(const QString& id, int current, int tot
     if (row>=0) {
         POJProblemCase problemCase = mOJProblemModel.getCase(row);
         ProblemCaseValidator validator;
-        problemCase->testState = validator.validate(problemCase,pSettings->executor().ignoreSpacesWhenValidatingCases())?
+        problemCase->testState = validator.validate(problemCase,pSettings->executor().problemCaseValidateType())?
                     ProblemCaseTestState::Passed:
                     ProblemCaseTestState::Failed;
         mOJProblemModel.update(row);
@@ -6009,7 +6180,7 @@ void MainWindow::cleanUpCPUDialog()
 void MainWindow::onDebugCommandInput(const QString& command)
 {
     if (mDebugger->executing()) {
-        mDebugger->sendCommand(command,"", DebugCommandSource::Console);
+        mDebugger->runClientCommand(command,"", DebugCommandSource::Console);
     }
 }
 
@@ -6076,16 +6247,6 @@ void MainWindow::on_actionPaste_triggered()
             editor->pasteFromClipboard();
             editor->activate();
         }
-    } else if (data->hasUrls()) {
-        QStringList filesToOpen;
-        foreach (const QUrl& url, data->urls()) {
-            QString s = url.toLocalFile();
-            if (!s.isEmpty()) {
-                filesToOpen.append(s);
-            }
-        }
-        if (!filesToOpen.isEmpty())
-            openFiles(filesToOpen);
     }
 }
 
@@ -6258,16 +6419,6 @@ bool MainWindow::debugInferiorhasBreakpoint()
             return true;
         }
     }
-//    if (!e->inProject()) {
-
-//    } else {
-//        for (const PBreakpoint& breakpoint:mDebugger->breakpointModel()->breakpoints(e->inProject())) {
-//            Editor* e1 = mEditorList->getOpenedEditorByFilename(breakpoint->filename);
-//            if (e1 && e1->inProject()) {
-//                return true;
-//            }
-//        }
-//    }
     return false;
 }
 
@@ -6275,7 +6426,7 @@ void MainWindow::on_actionStep_Over_triggered()
 {
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
-        mDebugger->sendCommand("-exec-next", "");
+        mDebugger->stepOver();
     }
 }
 
@@ -6283,7 +6434,7 @@ void MainWindow::on_actionStep_Into_triggered()
 {
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
-        mDebugger->sendCommand("-exec-step", "");
+        mDebugger->stepInto();
     }
 
 }
@@ -6292,7 +6443,7 @@ void MainWindow::on_actionStep_Out_triggered()
 {
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
-        mDebugger->sendCommand("-exec-finish", "");
+        mDebugger->stepOut();
     }
 
 }
@@ -6303,9 +6454,7 @@ void MainWindow::on_actionRun_To_Cursor_triggered()
         Editor *e=mEditorList->getEditor();
         if (e!=nullptr) {
             //WatchView.Items.BeginUpdate();
-            mDebugger->sendCommand("-exec-until", QString("\"%1\":%2")
-                                   .arg(e->filename())
-                                   .arg(e->caretY()));
+            mDebugger->runTo(e->filename(), e->caretY());
         }
     }
 
@@ -6315,7 +6464,7 @@ void MainWindow::on_actionContinue_triggered()
 {
     if (mDebugger->executing()) {
         //WatchView.Items.BeginUpdate();
-        mDebugger->sendCommand("-exec-continue", "");
+        mDebugger->resume();
     }
 }
 
@@ -6360,7 +6509,7 @@ void MainWindow::onDebugEvaluateInput()
     if (!s.isEmpty()) {
         connect(mDebugger.get(), &Debugger::evalValueReady,
                    this, &MainWindow::onEvalValueReady);
-        mDebugger->sendCommand("-data-evaluate-expression",s);
+        mDebugger->evalExpression(s);
         pMainWindow->debugger()->refreshAll();
     }
 }
@@ -6371,10 +6520,9 @@ void MainWindow::onDebugMemoryAddressInput()
     if (!s.isEmpty()) {
 //        connect(mDebugger, &Debugger::memoryExamineReady,
 //                   this, &MainWindow::onMemoryExamineReady);
-        mDebugger->sendCommand("-data-read-memory",QString("%1 x 1 %2 %3 ")
-                               .arg(s)
-                               .arg(pSettings->debugger().memoryViewRows())
-                               .arg(pSettings->debugger().memoryViewColumns())
+        mDebugger->readMemory(s,
+                              pSettings->debugger().memoryViewRows(),
+                              pSettings->debugger().memoryViewColumns()
                                );
     }
 }
@@ -6716,9 +6864,8 @@ void MainWindow::on_actionPrevious_Editor_triggered()
 void MainWindow::on_actionToggle_Breakpoint_triggered()
 {
     Editor * editor = mEditorList->getEditor();
-    int line;
-    if (editor && editor->pointToLine(mEditorContextMenuPos,line))
-        editor->toggleBreakpoint(line);
+    if (editor)
+        editor->toggleBreakpoint(editor->caretY());
 }
 
 
@@ -6740,12 +6887,11 @@ void MainWindow::on_actionClear_all_breakpoints_triggered()
 void MainWindow::on_actionBreakpoint_property_triggered()
 {
     Editor * editor = mEditorList->getEditor();
-    int line;
-    if (editor && editor->pointToLine(mEditorContextMenuPos,line)) {
+    if (editor) {
+        int line = editor->caretY();
         if (editor->hasBreakpoint(line))
             editor->modifyBreakpointProperty(line);
     }
-
 }
 
 
@@ -6769,10 +6915,9 @@ void MainWindow::on_actionGoto_Definition_triggered()
 void MainWindow::on_actionFind_references_triggered()
 {
     Editor * editor = mEditorList->getEditor();
-    QSynedit::BufferCoord pos;
-    if (editor && editor->pointToCharLine(mEditorContextMenuPos,pos)) {
+    if (editor) {
         CppRefacter refactor;
-        refactor.findOccurence(editor,pos);
+        refactor.findOccurence(editor, editor->caretXY());
         showSearchPanel(false);
     }
 }
@@ -6802,7 +6947,7 @@ void MainWindow::on_actionOpen_Terminal_triggered()
 #ifdef Q_OS_WIN
             openShell(info.path(),"cmd.exe",getBinDirsForCurrentEditor());
 #else
-            openShell(info.path(),pSettings->environment().terminalPathForExec(),getBinDirsForCurrentEditor());
+            openShell(info.path(),pSettings->environment().terminalPath(),getBinDirsForCurrentEditor());
 #endif
         }
     }
@@ -6948,9 +7093,20 @@ void MainWindow::on_actionNew_Project_triggered()
             }
         }
 
-//     if cbDefault.Checked then
-//        devData.DefCpp := rbCpp.Checked;
-
+        QDir projectDir = QDir(location);
+        if (!projectDir.isEmpty()) {
+            if (QMessageBox::question(
+                        nullptr,
+                        tr("Folder Not Empty"),
+                        tr("The project folder is not empty, existing files may be overwritten.")
+                        + "<br/><br/>"
+                        +tr("Do you want to proceed?"),
+                        QMessageBox::Yes | QMessageBox::No,
+                        QMessageBox::No
+                        ) == QMessageBox::No) {
+                return;
+            }
+        }
         s = includeTrailingPathDelimiter(location)
                 + dialog.getProjectName() + "." + DEV_PROJECT_EXT;
 
@@ -6974,6 +7130,7 @@ void MainWindow::on_actionNew_Project_triggered()
                                   tr("New project fail"),
                                   tr("Can't assign project template"),
                                   QMessageBox::Ok);
+            return;
         }
         mProject->saveAll();
         updateProjectView();
@@ -7044,6 +7201,7 @@ void MainWindow::on_actionAdd_to_project_triggered()
         foreach (const QString& filename, dialog.selectedFiles()) {
             PProjectUnit newUnit = mProject->addUnit(filename,folderNode);
             mProject->cppParser()->addProjectFile(filename,true);
+#ifdef ENABLE_VCS
             QString branch;
             if (pSettings->vcs().gitOk() && mProject->model()->iconProvider()->VCSRepository()->hasRepository(branch)) {
                 QString output;
@@ -7052,6 +7210,7 @@ void MainWindow::on_actionAdd_to_project_triggered()
                             output
                             );
             }
+#endif
             if (newUnit) {
                 QModelIndex index = mProject->model()->getNodeIndex(newUnit->node().get());
                 index = mProjectProxyModel->mapFromSource(index);
@@ -7106,6 +7265,10 @@ void MainWindow::on_actionView_Makefile_triggered()
 {
     if (!mProject)
         return;
+    Editor *editor = mEditorList->getOpenedEditorByFilename(mProject->makeFileName());
+    if (editor) {
+        mEditorList->closeEditor(editor, false, true);
+    }
     prepareProjectForCompile();
     mCompilerManager->buildProjectMakefile(mProject);
     openFile(mProject->makeFileName());
@@ -7137,7 +7300,7 @@ void MainWindow::on_actionProject_Open_In_Terminal_triggered()
 #ifdef Q_OS_WIN
     openShell(mProject->directory(),"cmd.exe",mProject->binDirs());
 #else
-    openShell(mProject->directory(),pSettings->environment().terminalPathForExec(),mProject->binDirs());
+    openShell(mProject->directory(),pSettings->environment().terminalPath(),mProject->binDirs());
 #endif
 }
 
@@ -7417,11 +7580,13 @@ void MainWindow::newProjectUnitFile(const QString& suffix)
     if (editor)
         editor->activate();
     QString branch;
+#ifdef ENABLE_VCS
     if (pSettings->vcs().gitOk() && mProject->model()->iconProvider()->VCSRepository()->hasRepository(branch)) {
         QString output;
         mProject->model()->iconProvider()->VCSRepository()->add(newFileName,output);
         mProject->model()->refreshIcon(newFileName);
     }
+#endif
     updateProjectView();
 }
 
@@ -7472,19 +7637,11 @@ void MainWindow::doFilesViewRemoveFile(const QModelIndex &index)
                                       + tr("Do you really want to delete it?"),
                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No)!=QMessageBox::Yes)
             return;
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,2)
         if (!QFile::moveToTrash(dir.absolutePath()))
             dir.removeRecursively();
-#else
-        dir.removeRecursively();
-#endif
     } else {
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,2)
         if (!QFile::moveToTrash(mFileSystemModel.filePath(index)))
             QFile::remove(mFileSystemModel.filePath(index));
-#else
-        QFile::remove(mFileSystemModel.filePath(index));
-#endif
     }
 }
 
@@ -7523,7 +7680,8 @@ void MainWindow::reparseNonProjectEditors()
     for (int i=0;i<mEditorList->pageCount();i++) {
         Editor* e=(*mEditorList)[i];
         if (!e->inProject()) {
-            if (!pSettings->codeCompletion().clearWhenEditorHidden() || e->isVisible()) {
+//            if (!pSettings->codeCompletion().clearWhenEditorHidden() || e->isVisible()) {
+            if (e->isVisible()) {
                 e->reparse(true);
                 e->checkSyntaxInBack();
             }
@@ -7574,6 +7732,96 @@ QString MainWindow::switchHeaderSourceTarget(Editor *editor)
         }
     }
     return QString();
+}
+
+void MainWindow::modifyBreakpointCondition(int index)
+{
+    PBreakpoint breakpoint = debugger()->breakpointModel()->breakpoint(
+                index,
+                debugger()->isForProject()
+                );
+    if (breakpoint) {
+        bool isOk;
+        QString s=QInputDialog::getText(this,
+                                  tr("Break point condition"),
+                                  tr("Enter the condition of the breakpoint:"),
+                                QLineEdit::Normal,
+                                breakpoint->condition,&isOk);
+        if (isOk) {
+            debugger()->setBreakPointCondition(index,s,debugger()->isForProject());
+        }
+    }
+
+}
+
+void MainWindow::initEditorActions()
+{
+    ui->menuCode->menuAction()->setVisible(false);
+    ui->menuEdit->menuAction()->setVisible(false);
+    ui->menuSelection->menuAction()->setVisible(false);
+    ui->menuRefactor->menuAction()->setVisible(false);
+
+    backupMenuForEditor(ui->menuEdit, mMenuEditBackup);
+    backupMenuForEditor(ui->menuSelection, mMenuSelectionBackup);
+    backupMenuForEditor(ui->menuCode, mMenuCodeBackup);
+    backupMenuForEditor(ui->menuRefactor, mMenuRefactorBackup);
+    backupMenuForEditor(ui->menuMove_Caret, mMenuMoveCaretBackup);
+    backupMenuForEditor(mMenuEncoding, mMenuEncodingBackup);
+    backupMenuForEditor(mMenuExport, mMenuExportBackup);
+
+    // changeEditorActionParent(ui->actionPrint, tr("File"));
+    // changeEditorActionParent(ui->actionSave, tr("File"));
+    // changeEditorActionParent(ui->actionSaveAs, tr("File"));
+    // changeEditorActionParent(ui->actionClose, tr("File"));
+
+    // changeEditorActionParent(ui->actionFind, tr("Search"));
+    // changeEditorActionParent(ui->actionReplace, tr("Search"));
+    changeEditorActionParent(ui->actionFind_references, tr("Search"));
+    // changeEditorActionParent(ui->actionFind_Next, tr("Search"));
+    // changeEditorActionParent(ui->actionFind_Previous, tr("Search"));
+    changeEditorActionParent(ui->actionToggle_Breakpoint, tr("Debug"));
+    changeEditorActionParent(ui->actionGoto_Declaration, tr("Code"));
+    changeEditorActionParent(ui->actionGoto_Definition, tr("Code"));
+    changeEditorActionParent(ui->actionFile_Properties, tr("Code"));
+    changeEditorActionParent(ui->actionLocate_in_Files_View, tr("Code"));
+    changeEditorActionParent(ui->actionSwitchHeaderSource, tr("Code"));
+}
+
+void MainWindow::changeEditorActionParent(QAction *action, const QString& groupName)
+{
+    removeAction(action);
+    action->setParent(ui->EditorPanel);
+    ui->EditorPanel->addAction(action);
+    action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    action->setData(groupName);
+}
+
+void MainWindow::backupMenuForEditor(QMenu *menu, QList<QAction *> &backup)
+{
+    foreach (QAction* action, menu->actions()) {
+        if (!action->objectName().isEmpty())
+            changeEditorActionParent(action, menu->title());
+        if (action->isSeparator()) {
+            action = new QAction();
+            action->setSeparator(true);
+        }
+        backup.append(action);
+    }
+    menu->clear();
+    connect(menu,&QMenu::aboutToShow,
+            [menu, backup] {
+        foreach (QAction* action, backup) {
+            if (action->isSeparator()) {
+                menu->addSeparator();
+            } else {
+                menu->addAction(action);
+            }
+        }
+    });
+    connect(menu,&QMenu::aboutToHide,
+            [menu] {
+        menu->clear();
+    });
 }
 
 void MainWindow::setupSlotsForProject()
@@ -7760,6 +8008,7 @@ void MainWindow::setDockMessagesToArea(const Qt::DockWidgetArea &area)
     }
 }
 
+#ifdef ENABLE_VCS
 void MainWindow::updateVCSActions()
 {
     bool hasRepository = false;
@@ -7794,6 +8043,7 @@ void MainWindow::updateVCSActions()
     ui->actionGit_Restore->setEnabled(hasRepository && shouldEnable);
     ui->actionGit_Revert->setEnabled(hasRepository && shouldEnable);
 }
+#endif
 
 void MainWindow::invalidateProjectProxyModel()
 {
@@ -7932,6 +8182,7 @@ void MainWindow::on_actionRename_Symbol_triggered()
     refactor.renameSymbol(editor,oldCaretXY,newWord);
     editor->reparse(true);
     editor->checkSyntaxInBack();
+    editor->reparseTodo();
 }
 
 
@@ -7983,7 +8234,7 @@ void MainWindow::doCompileRun(RunType runType)
     QString execName;
     if (target == CompileTarget::Project) {
         binDirs = mProject->binDirs();
-        execName = mProject->executable();
+        execName = mProject->outputFilename();
     } else {
         binDirs = getDefaultCompilerSetBinDirs();
     }
@@ -8103,7 +8354,7 @@ void MainWindow::on_btnReplace_clicked()
         while (!selections.isEmpty()) {
             const PSearchResultTreeItem& item = selections.back();
             selections.pop_back();
-            QString line = editor->document()->getLine(item->line-1);
+            QString line = editor->lineText(item->line);
             if (line.mid(item->start-1,results->keyword.length())!=results->keyword) {
                 QMessageBox::critical(editor,
                             tr("Replace Error"),
@@ -8251,35 +8502,6 @@ TodoModel *MainWindow::todoModel()
     return &mTodoModel;
 }
 
-
-void MainWindow::on_actionAdd_bookmark_triggered()
-{
-    Editor* editor = mEditorList->getEditor();
-    int line;
-    if (editor && editor->pointToLine(mEditorContextMenuPos,line)) {
-        if (editor->document()->count()<=0)
-            return;
-        QString desc = QInputDialog::getText(editor,tr("Bookmark Description"),
-                                             tr("Description:"),QLineEdit::Normal,
-                                             editor->document()->getLine(line-1).trimmed());
-        desc = desc.trimmed();
-        editor->addBookmark(line);
-        mBookmarkModel->addBookmark(editor->filename(),line,desc,editor->inProject());
-    }
-}
-
-
-void MainWindow::on_actionRemove_Bookmark_triggered()
-{
-    Editor* editor = mEditorList->getEditor();
-    int line;
-    if (editor && editor->pointToLine(mEditorContextMenuPos,line)) {
-        editor->removeBookmark(line);
-        mBookmarkModel->removeBookmark(editor->filename(),line,editor->inProject());
-    }
-}
-
-
 void MainWindow::on_tableBookmark_doubleClicked(const QModelIndex &index)
 {
     if (!index.isValid())
@@ -8297,8 +8519,8 @@ void MainWindow::on_tableBookmark_doubleClicked(const QModelIndex &index)
 void MainWindow::on_actionModify_Bookmark_Description_triggered()
 {
     Editor* editor = mEditorList->getEditor();
-    int line;
-    if (editor && editor->pointToLine(mEditorContextMenuPos,line)) {
+    if (editor) {
+        int line = editor->caretY();
         PBookmark bookmark = mBookmarkModel->bookmark(editor->filename(),line);
         if (bookmark) {
             QString desc = QInputDialog::getText(editor,tr("Bookmark Description"),
@@ -8599,6 +8821,7 @@ bool MainWindow::openningFiles() const
 QList<QAction *> MainWindow::listShortCutableActions()
 {
     QList<QAction*> actions = findChildren<QAction *>(QString(), Qt::FindDirectChildrenOnly);
+    actions += ui->EditorPanel->actions();
     return actions;
 }
 
@@ -8610,9 +8833,9 @@ void MainWindow::switchCurrentStackTrace(int idx)
         if (e) {
             e->setCaretPositionAndActivate(trace->line,1);
         }
-        mDebugger->sendCommand("-stack-select-frame", QString("%1").arg(trace->level));
-        mDebugger->sendCommand("-stack-list-variables", "--all-values");
-        mDebugger->sendCommand("-var-update", "--all-values *");
+        mDebugger->selectFrame(trace);
+        mDebugger->refreshStackVariables();
+        mDebugger->refreshWatchVars();
         if (this->mCPUDialog) {
             this->mCPUDialog->updateInfo();
         }
@@ -8957,7 +9180,7 @@ void MainWindow::on_actionNew_Class_triggered()
     pSettings->ui().setNewHeaderDialogHeight(dialog.height());
 }
 
-
+#ifdef ENABLE_VCS
 void MainWindow::on_actionGit_Create_Repository_triggered()
 {
     if (ui->treeFiles->isVisible()) {
@@ -9130,15 +9353,6 @@ void MainWindow::on_actionGit_Restore_triggered()
 }
 
 
-void MainWindow::on_actionWebsite_triggered()
-{
-    if (pSettings->environment().language()=="zh_CN") {
-        QDesktopServices::openUrl(QUrl("https://royqh1979.gitee.io/redpandacpp/"));
-    } else {
-        QDesktopServices::openUrl(QUrl("https://sourceforge.net/projects/redpanda-cpp/"));
-    }
-}
-
 
 void MainWindow::on_actionGit_Branch_triggered()
 {
@@ -9160,7 +9374,6 @@ void MainWindow::on_actionGit_Branch_triggered()
         setFilesViewRoot(pSettings->environment().currentFolder());
     }
 }
-
 
 void MainWindow::on_actionGit_Merge_triggered()
 {
@@ -9310,6 +9523,16 @@ void MainWindow::on_actionGit_Push_triggered()
     }
 }
 
+#endif
+
+void MainWindow::on_actionWebsite_triggered()
+{
+    if (pSettings->environment().language()=="zh_CN") {
+        QDesktopServices::openUrl(QUrl("http://royqh.net/redpandacpp/"));
+    } else {
+        QDesktopServices::openUrl(QUrl("https://sourceforge.net/projects/redpanda-cpp/"));
+    }
+}
 
 void MainWindow::on_actionFilesView_Hide_Non_Support_Files_toggled(bool /* arg1 */)
 {
@@ -9533,14 +9756,6 @@ void MainWindow::on_actionToggle_Messages_Panel_triggered()
     stretchMessagesPanel(ui->tabMessages->isShrinked());
 }
 
-
-void MainWindow::on_chkIgnoreSpaces_stateChanged(int /*arg1*/)
-{
-    pSettings->executor().setIgnoreSpacesWhenValidatingCases(ui->chkIgnoreSpaces->isChecked());
-}
-
-
-
 void MainWindow::on_actionRaylib_Manual_triggered()
 {
     if (pSettings->environment().language()=="zh_CN") {
@@ -9567,14 +9782,13 @@ void MainWindow::on_actionGo_to_Line_triggered()
         return;
     bool ok;
     int lineNo=QInputDialog::getInt(e,tr("Go to Line"),tr("Line"),
-                                    e->caretY(),1,e->document()->count(),
+                                    e->caretY(),1,e->lineCount(),
                                     1,&ok);
     if (ok && lineNo!=e->caretY()) {
         e->setCaretPosition(lineNo,1);
         e->setFocus();
     }
 }
-
 
 void MainWindow::on_actionNew_Template_triggered()
 {
@@ -9736,7 +9950,7 @@ void MainWindow::on_actionSubmit_Issues_triggered()
 
 void MainWindow::on_actionDocument_triggered()
 {
-    QDesktopServices::openUrl(QUrl("https://royqh1979.gitee.io/redpandacpp/docsy/docs/usage"));
+    QDesktopServices::openUrl(QUrl("http://royqh.net/redpandacpp//docsy/docs/usage"));
 }
 
 
@@ -9746,7 +9960,8 @@ void MainWindow::on_actionNew_GAS_File_triggered()
         if (QMessageBox::question(this,
                                   tr("New Project File?"),
                                   tr("Do you want to add the new file to the project?"),
-                                  QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::Yes) == QMessageBox::Yes) {
             newProjectUnitFile("s");
             return;
         }
@@ -9813,7 +10028,8 @@ void MainWindow::on_actionNew_Text_File_triggered()
         if (QMessageBox::question(this,
                                   tr("New Project File?"),
                                   tr("Do you want to add the new file to the project?"),
-                                  QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::Yes) == QMessageBox::Yes) {
             newProjectUnitFile("txt");
             return;
         }
@@ -9826,7 +10042,7 @@ void MainWindow::on_actionPage_Up_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::PageUp);
+        editor->pageUp();
     }
 }
 
@@ -9835,7 +10051,7 @@ void MainWindow::on_actionPage_Down_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::PageDown);
+        editor->pageDown();
     }
 }
 
@@ -9844,7 +10060,7 @@ void MainWindow::on_actionGoto_Line_Start_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::LineStart);
+        editor->gotoLineStart();
     }
 }
 
@@ -9853,7 +10069,7 @@ void MainWindow::on_actionGoto_Line_End_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::LineEnd);
+        editor->gotoLineEnd();
     }
 }
 
@@ -9862,7 +10078,7 @@ void MainWindow::on_actionGoto_File_Start_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::EditorStart);
+        editor->gotoFileStart();
     }
 }
 
@@ -9871,7 +10087,7 @@ void MainWindow::on_actionGoto_File_End_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::EditorEnd);
+        editor->gotoFileEnd();
     }
 }
 
@@ -9880,7 +10096,7 @@ void MainWindow::on_actionPage_Up_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelPageUp);
+        editor->pageUpAndSelect();;
     }
 }
 
@@ -9889,7 +10105,7 @@ void MainWindow::on_actionPage_Down_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelPageDown);
+        editor->pageDownAndSelect();
     }
 }
 
@@ -9898,7 +10114,7 @@ void MainWindow::on_actionGoto_Page_Start_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::PageTop);
+        editor->gotoPageStart();
     }
 }
 
@@ -9907,7 +10123,7 @@ void MainWindow::on_actionGoto_Page_End_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::PageBottom);
+        editor->gotoPageEnd();
     }
 }
 
@@ -9916,7 +10132,7 @@ void MainWindow::on_actionGoto_Page_Start_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelPageTop);
+        editor->selectToPageStart();
     }
 }
 
@@ -9925,7 +10141,7 @@ void MainWindow::on_actionGoto_Page_End_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelPageBottom);
+        editor->selectToPageEnd();
     }
 }
 
@@ -9934,7 +10150,7 @@ void MainWindow::on_actionGoto_Line_Start_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelLineStart);
+        editor->selectToLineStart();
     }
 }
 
@@ -9943,7 +10159,7 @@ void MainWindow::on_actionGoto_Line_End_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelLineEnd);
+        editor->selectToLineEnd();
     }
 }
 
@@ -9952,7 +10168,7 @@ void MainWindow::on_actionGoto_File_Start_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelEditorStart);
+        editor->selectToFileStart();
     }
 }
 
@@ -9961,7 +10177,7 @@ void MainWindow::on_actionGoto_File_End_and_Select_triggered()
 {
     Editor * editor = mEditorList->getEditor();
     if (editor && editor->hasFocus()) {
-        editor->processCommand(QSynedit::EditCommand::SelEditorEnd);
+        editor->selectToFileEnd();
     }
 }
 
@@ -9985,5 +10201,51 @@ void MainWindow::on_actionOI_Wiki_triggered()
 void MainWindow::on_actionTurtle_Graphics_Manual_triggered()
 {
     QDesktopServices::openUrl(QUrl("https://zhuanlan.zhihu.com/p/538666844"));
+}
+
+bool MainWindow::openingProject() const
+{
+    return mOpeningProject;
+}
+
+bool MainWindow::openingFiles() const
+{
+    return mOpeningFiles;
+}
+
+
+void MainWindow::on_cbProblemCaseValidateType_currentIndexChanged(int index)
+{
+    pSettings->executor().setProblemCaseValidateType((ProblemCaseValidateType)index);
+    pSettings->executor().save();
+}
+
+
+void MainWindow::on_actionToggle_Bookmark_triggered()
+{
+    Editor* editor = mEditorList->getEditor();
+    if (editor) {
+        if (editor->lineCount()<=0)
+            return;
+        int line = editor->caretY();
+        editor->toggleBookmark(line);
+        if (editor->hasBookmark(line)) {
+            QString desc = QInputDialog::getText(editor,tr("Bookmark Description"),
+                                                 tr("Description:"),QLineEdit::Normal,
+                                                 editor->lineText(line).trimmed());
+            desc = desc.trimmed();
+            mBookmarkModel->addBookmark(editor->filename(),line,desc,editor->inProject());
+        } else
+            mBookmarkModel->removeBookmark(editor->filename(),line,editor->inProject());
+    }
+}
+
+
+void MainWindow::on_actionCode_Completion_triggered()
+{
+    Editor* editor = mEditorList->getEditor();
+    if (editor) {
+        editor->showCodeCompletion();
+    }
 }
 

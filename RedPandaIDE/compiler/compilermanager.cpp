@@ -16,32 +16,30 @@
  */
 #include "compilermanager.h"
 #include "filecompiler.h"
+#include "../project.h"
+#ifdef ENABLE_SDCC
+#include "sdccfilecompiler.h"
+#include "sdccprojectcompiler.h"
+#endif
 #include "stdincompiler.h"
 #include "../mainwindow.h"
 #include "executablerunner.h"
 #include "ojproblemcasesrunner.h"
 #include "utils.h"
+#include "utils/parsearg.h"
 #include "../systemconsts.h"
 #include "../settings.h"
 #include <QMessageBox>
 #include <QUuid>
 #include "projectcompiler.h"
-
-enum RunProgramFlag {
-    RPF_PAUSE_CONSOLE =     0x0001,
-    RPF_REDIRECT_INPUT =    0x0002
-};
+#ifdef Q_OS_MACOS
+#include <sys/posix_shm.h>
+#endif
 
 CompilerManager::CompilerManager(QObject *parent) : QObject(parent),
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     mCompileMutex(),
     mBackgroundSyntaxCheckMutex(),
     mRunnerMutex()
-#else
-    mCompileMutex(QMutex::Recursive),
-    mBackgroundSyntaxCheckMutex(QMutex::Recursive),
-    mRunnerMutex(QMutex::Recursive)
-#endif
 {
     mCompiler = nullptr;
     mBackgroundSyntaxChecker = nullptr;
@@ -87,7 +85,12 @@ void CompilerManager::compile(const QString& filename, const QByteArray& encodin
         mCompileErrorCount = 0;
         mCompileIssueCount = 0;
         //deleted when thread finished
-        mCompiler = new FileCompiler(filename,encoding,compileType,false,false);
+#ifdef ENABLE_SDCC
+        if (pSettings->compilerSets().defaultSet()->compilerType()==CompilerType::SDCC) {
+            mCompiler = new SDCCFileCompiler(filename,encoding,compileType,false);
+        } else
+#endif
+            mCompiler = new FileCompiler(filename,encoding,compileType,false);
         mCompiler->setRebuild(rebuild);
         connect(mCompiler, &Compiler::finished, mCompiler, &QObject::deleteLater);
         connect(mCompiler, &Compiler::compileFinished, this, &CompilerManager::onCompileFinished);
@@ -118,7 +121,7 @@ void CompilerManager::compileProject(std::shared_ptr<Project> project, bool rebu
         mCompileErrorCount = 0;
         mCompileIssueCount = 0;
         //deleted when thread finished
-        mCompiler = new ProjectCompiler(project,false,false);
+        mCompiler = createProjectCompiler(project);
         mCompiler->setRebuild(rebuild);
         connect(mCompiler, &Compiler::finished, mCompiler, &QObject::deleteLater);
         connect(mCompiler, &Compiler::compileFinished, this, &CompilerManager::onCompileFinished);
@@ -150,7 +153,7 @@ void CompilerManager::cleanProject(std::shared_ptr<Project> project)
         mCompileErrorCount = 0;
         mCompileIssueCount = 0;
         //deleted when thread finished
-        ProjectCompiler* compiler = new ProjectCompiler(project,false,false);
+        ProjectCompiler* compiler = createProjectCompiler(project);
         compiler->setOnlyClean(true);
         mCompiler = compiler;
         mCompiler->setRebuild(false);
@@ -181,10 +184,10 @@ void CompilerManager::buildProjectMakefile(std::shared_ptr<Project> project)
         if (mCompiler!=nullptr) {
             return;
         }
-        ProjectCompiler compiler(project,false,false);
-        compiler.buildMakeFile();
+        ProjectCompiler* pCompiler=createProjectCompiler(project);
+        pCompiler->buildMakeFile();
+        delete pCompiler;
     }
-
 }
 
 void CompilerManager::checkSyntax(const QString &filename, const QByteArray& encoding, const QString &content, std::shared_ptr<Project> project)
@@ -205,7 +208,7 @@ void CompilerManager::checkSyntax(const QString &filename, const QByteArray& enc
         mSyntaxCheckIssueCount = 0;
 
         //deleted when thread finished
-        mBackgroundSyntaxChecker = new StdinCompiler(filename,encoding, content,true,true);
+        mBackgroundSyntaxChecker = new StdinCompiler(filename,encoding, content,true);
         mBackgroundSyntaxChecker->setProject(project);
         connect(mBackgroundSyntaxChecker, &Compiler::finished, mBackgroundSyntaxChecker, &QThread::deleteLater);
         connect(mBackgroundSyntaxChecker, &Compiler::compileIssue, this, &CompilerManager::onSyntaxCheckIssue);
@@ -243,22 +246,42 @@ void CompilerManager::run(
         if (pSettings->executor().pauseConsole())
             consoleFlag |= RPF_PAUSE_CONSOLE;
 #ifdef Q_OS_WIN
+        if (pSettings->executor().enableVirualTerminalSequence())
+            consoleFlag |= RPF_ENABLE_VIRTUAL_TERMINAL_PROCESSING;
         if (consoleFlag!=0) {
             QString sharedMemoryId = QUuid::createUuid().toString();
-            QString newArguments = QString(" %1 %2 \"%3\" %4")
-                    .arg(consoleFlag)
-                    .arg(sharedMemoryId,localizePath(filename)).arg(arguments);
-
-            //delete when thread finished
-            execRunner = new ExecutableRunner(includeTrailingPathDelimiter(pSettings->dirs().appDir())+CONSOLE_PAUSER,newArguments,workDir);
-            execRunner->setShareMemoryId(sharedMemoryId);
+            QString consolePauserPath = includeTrailingPathDelimiter(pSettings->dirs().appDir()) + CONSOLE_PAUSER;
+            QStringList execArgs = QStringList{
+                consolePauserPath,
+                QString::number(consoleFlag),
+                sharedMemoryId,
+                localizePath(filename)
+            } + parseArgumentsWithoutVariables(arguments);
+            if (pSettings->environment().useCustomTerminal()) {
+                auto [filename, args, fileOwner] = wrapCommandForTerminalEmulator(
+                    pSettings->environment().terminalPath(),
+                    pSettings->environment().terminalArgumentsPattern(),
+                    execArgs
+                );
+                //delete when thread finished
+                execRunner = new ExecutableRunner(filename, args, workDir);
+                execRunner->setShareMemoryId(sharedMemoryId);
+                mTempFileOwner = std::move(fileOwner);
+            } else {
+                //delete when thread finished
+                execRunner = new ExecutableRunner(execArgs[0], execArgs.mid(1), workDir);
+                execRunner->setShareMemoryId(sharedMemoryId);
+            }
         } else {
             //delete when thread finished
-            execRunner = new ExecutableRunner(filename,arguments,workDir);
+            execRunner = new ExecutableRunner(filename, parseArgumentsWithoutVariables(arguments), workDir);
         }
 #else
-        QString newArguments;
+        QStringList execArgs;
         QString sharedMemoryId = "/r"+QUuid::createUuid().toString(QUuid::StringFormat::Id128);
+#ifdef Q_OS_MACOS
+        sharedMemoryId = sharedMemoryId.mid(0, PSHMNAMLEN);
+#endif
         if (consoleFlag!=0) {
             QString consolePauserPath=includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"consolepauser";
             if (!fileExists(consolePauserPath)) {
@@ -270,31 +293,40 @@ void CompilerManager::run(
 
             }
             if (redirectInput) {
-                newArguments = QString(" -e \"%1\" %2 %3 \"%4\" \"%5\" %6")
-                        .arg(consolePauserPath)
-                        .arg(consoleFlag)
-                        .arg(sharedMemoryId)
-                        .arg(escapeSpacesInString(redirectInputFilename))
-                        .arg(localizePath(escapeSpacesInString(filename)))
-                        .arg(arguments);
+                execArgs = QStringList{
+                    consolePauserPath,
+                    QString::number(consoleFlag),
+                    sharedMemoryId,
+                    redirectInputFilename,
+                    localizePath(filename),
+                } + parseArgumentsWithoutVariables(arguments);
             } else {
-                newArguments = QString(" -e \"%1\" %2 %3 \"%4\" %5")
-                    .arg(consolePauserPath)
-                    .arg(consoleFlag)
-                    .arg(sharedMemoryId,localizePath(escapeSpacesInString(filename))).arg(arguments);
+                execArgs = QStringList{
+                    consolePauserPath,
+                    QString::number(consoleFlag),
+                    sharedMemoryId,
+                    localizePath(filename),
+                } + parseArgumentsWithoutVariables(arguments);
             }
         } else {
-            newArguments = QString(" -e \"%1\" %2")
-                .arg(localizePath(escapeSpacesInString(filename))).arg(arguments);
+            execArgs = QStringList{
+                localizePath(filename),
+            } + parseArgumentsWithoutVariables(arguments);
         }
-        execRunner = new ExecutableRunner(pSettings->environment().terminalPathForExec(),newArguments,workDir);
+        auto [filename, args, fileOwner] = wrapCommandForTerminalEmulator(
+            pSettings->environment().terminalPath(),
+            pSettings->environment().terminalArgumentsPattern(),
+            execArgs
+        );
+        execRunner = new ExecutableRunner(filename, args, workDir);
         execRunner->setShareMemoryId(sharedMemoryId);
+        mTempFileOwner = std::move(fileOwner);
 #endif
         execRunner->setStartConsole(true);
     } else {
         //delete when thread finished
-        execRunner = new ExecutableRunner(filename,arguments,workDir);
-    }    
+        execRunner = new ExecutableRunner(filename, parseArgumentsWithoutVariables(arguments), workDir);
+    }
     if (redirectInput) {
         execRunner->setRedirectInput(true);
         execRunner->setRedirectInputFilename(redirectInputFilename);
@@ -337,7 +369,7 @@ void CompilerManager::doRunProblem(const QString &filename, const QString &argum
     if (mRunner!=nullptr) {
         return;
     }
-    OJProblemCasesRunner * execRunner = new OJProblemCasesRunner(filename,arguments,workDir,problemCases);
+    OJProblemCasesRunner * execRunner = new OJProblemCasesRunner(filename, parseArgumentsWithoutVariables(arguments), workDir, problemCases);
     mRunner = execRunner;
     if (pSettings->executor().enableCaseLimit()) {
         execRunner->setExecTimeout(pSettings->executor().caseTimeout());
@@ -370,6 +402,7 @@ void CompilerManager::stopRun()
         mRunner->stop();
         disconnect(mRunner, &Runner::finished, this ,&CompilerManager::onRunnerTerminated);
         mRunner=nullptr;
+        mTempFileOwner=nullptr;
     }
 }
 
@@ -385,6 +418,7 @@ void CompilerManager::stopPausing()
         disconnect(mRunner, &Runner::finished, this ,&CompilerManager::onRunnerTerminated);
         mRunner->stop();
         mRunner=nullptr;
+        mTempFileOwner=nullptr;
     }
 }
 
@@ -418,6 +452,7 @@ void CompilerManager::onRunnerTerminated()
 {
     QMutexLocker locker(&mRunnerMutex);
     mRunner=nullptr;
+    mTempFileOwner=nullptr;
 }
 
 void CompilerManager::onRunnerPausing()
@@ -428,6 +463,7 @@ void CompilerManager::onRunnerPausing()
     disconnect(mRunner, &Runner::runErrorOccurred, pMainWindow ,&MainWindow::onRunErrorOccured);
     connect(this, &CompilerManager::signalStopAllRunners, mRunner, &Runner::stop);
     mRunner=nullptr;
+    mTempFileOwner=nullptr;
 }
 
 void CompilerManager::onCompileIssue(PCompileIssue issue)
@@ -451,6 +487,16 @@ void CompilerManager::onSyntaxCheckIssue(PCompileIssue issue)
     if (issue->type == CompileIssueType::Error ||
             issue->type == CompileIssueType::Warning)
         mSyntaxCheckIssueCount++;
+}
+
+ProjectCompiler *CompilerManager::createProjectCompiler(std::shared_ptr<Project> project)
+{
+#ifdef ENABLE_SDCC
+    if (project->options().type==ProjectType::MicroController)
+        return new SDCCProjectCompiler(project);
+    else
+#endif
+        return new ProjectCompiler(project);
 }
 
 int CompilerManager::syntaxCheckIssueCount() const

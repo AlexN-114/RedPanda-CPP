@@ -16,6 +16,7 @@
  */
 #include "makefile.h"
 #include "../constants.h"
+#include <qt_utils/utils.h>
 //#include <QDebug>
 
 namespace QSynedit {
@@ -643,23 +644,18 @@ void MakefileSyntaxer::next()
 void MakefileSyntaxer::setLine(const QString &newLine, int lineNumber)
 {
     mLineString = newLine;
-    mLine = mLineString.data();
+    mLine = getNullTerminatedStringData(mLineString);
     mLineNumber = lineNumber;
     mRun = 0;
     next();
 }
 
-bool MakefileSyntaxer::getTokenFinished() const
-{
-    return true;
-}
-
-bool MakefileSyntaxer::isLastLineCommentNotFinished(int /*state*/) const
+bool MakefileSyntaxer::isCommentNotFinished(int /*state*/) const
 {
     return false;
 }
 
-bool MakefileSyntaxer::isLastLineStringNotFinished(int /*state*/) const
+bool MakefileSyntaxer::isStringNotFinished(int /*state*/) const
 {
     return false;
 }
@@ -694,6 +690,16 @@ QSet<QString> MakefileSyntaxer::keywords()
 QString MakefileSyntaxer::commentSymbol()
 {
     return "#";
+}
+
+bool MakefileSyntaxer::supportFolding()
+{
+    return false;
+}
+
+bool MakefileSyntaxer::needsLineState()
+{
+    return true;
 }
 
 }

@@ -31,9 +31,7 @@ NewProjectDialog::NewProjectDialog(QWidget *parent) :
 {
     setWindowFlag(Qt::WindowContextHelpButtonHint,false);
     ui->setupUi(this);
-#if QT_VERSION >= QT_VERSION_CHECK(5, 12, 0)
     ui->lstTemplates->setItemAlignment(Qt::AlignCenter);
-#endif
     mTemplatesTabBar = new QTabBar(this);
     mTemplatesTabBar->setExpanding(false);
     ui->verticalLayout->insertWidget(0,mTemplatesTabBar);
@@ -121,7 +119,20 @@ void NewProjectDialog::addTemplate(const QString &filename)
         return;
     PProjectTemplate t = std::make_shared<ProjectTemplate>();
     t->readTemplateFile(filename);
-    mTemplates.append(t);
+    Settings::PCompilerSet pSet=pSettings->compilerSets().defaultSet();
+    if (pSet) {
+#ifdef ENABLE_SDCC
+        if (pSet->compilerType()==CompilerType::SDCC) {
+            if (t->options().type==ProjectType::MicroController)
+                mTemplates.append(t);
+        } else
+#endif
+        {
+            if (t->options().type!=ProjectType::MicroController)
+                mTemplates.append(t);
+        }
+    } else
+        mTemplates.append(t);
 }
 
 void NewProjectDialog::readTemplateDirs()
@@ -245,11 +256,18 @@ void NewProjectDialog::on_lstTemplates_currentItemChanged(QListWidgetItem *curre
                 ui->rdCProject->setChecked(true);
             }
         }
+        if (t->iconInfo().isEmpty()) {
+            ui->panelIconInfo->setVisible(false);
+        } else {
+            ui->panelIconInfo->setVisible(true);
+            ui->lblIconInfo->setText(t->iconInfo());
+        }
     } else {
         ui->lblDescription->setText("");
         ui->rdCProject->setChecked(false);
         ui->rdCppProject->setChecked(false);
         ui->chkMakeDefaultLanguage->setChecked(false);
+        ui->panelIconInfo->setVisible(false);
     }
     ui->buttonBox->button(QDialogButtonBox::Ok)->setEnabled(
                 current && !ui->txtProjectName->text().isEmpty()

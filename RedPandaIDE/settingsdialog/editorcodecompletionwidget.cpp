@@ -26,6 +26,7 @@ EditorCodeCompletionWidget::EditorCodeCompletionWidget(const QString& name, cons
     ui(new Ui::EditorCodeCompletionWidget)
 {
     ui->setupUi(this);
+    ui->chkClearWhenEditorHidden->setVisible(false);
 }
 
 EditorCodeCompletionWidget::~EditorCodeCompletionWidget()
@@ -40,8 +41,8 @@ void EditorCodeCompletionWidget::doLoad()
     ui->chkParseLocalFiles->setChecked(pSettings->codeCompletion().parseLocalHeaders());
     ui->chkParseSystemFiles->setChecked(pSettings->codeCompletion().parseGlobalHeaders());
 
-    ui->spinWidth->setValue(pSettings->codeCompletion().width());
-    ui->spinHeight->setValue(pSettings->codeCompletion().height());
+    ui->spinWidth->setValue(pSettings->codeCompletion().widthInColumns());
+    ui->spinHeight->setValue(pSettings->codeCompletion().heightInLines());
 
     ui->chkShowSuggestionWhileTyping->setChecked(pSettings->codeCompletion().showCompletionWhileInput());
     ui->chkRecordUsage->setChecked(pSettings->codeCompletion().recordUsage());
@@ -50,7 +51,7 @@ void EditorCodeCompletionWidget::doLoad()
     ui->chkIgnoreCases->setChecked(pSettings->codeCompletion().ignoreCase());
     ui->chkAppendFunc->setChecked(pSettings->codeCompletion().appendFunc());
     ui->chkShowCodeIns->setChecked(pSettings->codeCompletion().showCodeIns());
-    ui->chkClearWhenEditorHidden->setChecked(pSettings->codeCompletion().clearWhenEditorHidden());
+//    ui->chkClearWhenEditorHidden->setChecked(pSettings->codeCompletion().clearWhenEditorHidden());
     ui->chkHideSymbolsStartWithTwoUnderline->setChecked(pSettings->codeCompletion().hideSymbolsStartsWithTwoUnderLine());
     ui->chkHideSymbolsStartWithUnderline->setChecked(pSettings->codeCompletion().hideSymbolsStartsWithUnderLine());
 
@@ -66,8 +67,8 @@ void EditorCodeCompletionWidget::doSave()
     pSettings->codeCompletion().setParseLocalHeaders(ui->chkParseLocalFiles->isChecked());
     pSettings->codeCompletion().setParseGlobalHeaders(ui->chkParseSystemFiles->isChecked());
 
-    pSettings->codeCompletion().setWidth(ui->spinWidth->value());
-    pSettings->codeCompletion().setHeight(ui->spinHeight->value());
+    pSettings->codeCompletion().setWidthInColumns(ui->spinWidth->value());
+    pSettings->codeCompletion().setHeightInLines(ui->spinHeight->value());
 
     pSettings->codeCompletion().setShowCompletionWhileInput(ui->chkShowSuggestionWhileTyping->isChecked());
     pSettings->codeCompletion().setRecordUsage(ui->chkRecordUsage->isChecked());
@@ -78,7 +79,7 @@ void EditorCodeCompletionWidget::doSave()
     pSettings->codeCompletion().setShowCodeIns(ui->chkShowCodeIns->isChecked());
     pSettings->codeCompletion().setMinCharRequired(ui->spinMinCharRequired->value());
 
-    pSettings->codeCompletion().setClearWhenEditorHidden(ui->chkClearWhenEditorHidden->isChecked());
+    //pSettings->codeCompletion().setClearWhenEditorHidden(ui->chkClearWhenEditorHidden->isChecked());
 
     pSettings->codeCompletion().setHideSymbolsStartsWithTwoUnderLine(ui->chkHideSymbolsStartWithTwoUnderline->isChecked());
     pSettings->codeCompletion().setHideSymbolsStartsWithUnderLine(ui->chkHideSymbolsStartWithUnderline->isChecked());

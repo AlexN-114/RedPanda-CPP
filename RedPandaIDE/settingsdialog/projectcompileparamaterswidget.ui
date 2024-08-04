@@ -52,7 +52,7 @@
    <item>
     <widget class="QTabWidget" name="tabCommands">
      <property name="currentIndex">
-      <number>2</number>
+      <number>0</number>
      </property>
      <widget class="QWidget" name="tabCCompiler">
       <attribute name="title">
@@ -145,10 +145,6 @@
             <property name="text">
              <string>Add Library Files</string>
             </property>
-            <property name="icon">
-             <iconset resource="../icons.qrc">
-              <normaloff>:/icons/images/newlook24/035-expolr.png</normaloff>:/icons/images/newlook24/035-expolr.png</iconset>
-            </property>
             <property name="toolButtonStyle">
              <enum>Qt::ToolButtonTextBesideIcon</enum>
             </property>
@@ -185,8 +181,16 @@
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="../icons.qrc"/>
- </resources>
+ <tabstops>
+  <tabstop>grpAllowParallelBuilding</tabstop>
+  <tabstop>spinParallelJobs</tabstop>
+  <tabstop>tabCommands</tabstop>
+  <tabstop>txtCCompiler</tabstop>
+  <tabstop>txtCPPCompiler</tabstop>
+  <tabstop>txtLinker</tabstop>
+  <tabstop>btnChooseLib</tabstop>
+  <tabstop>txtResource</tabstop>
+ </tabstops>
+ <resources/>
  <connections/>
 </ui>

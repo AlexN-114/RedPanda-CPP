@@ -16,6 +16,7 @@
  */
 #include "asm.h"
 #include "../constants.h"
+#include <qt_utils/utils.h>
 #include <QDebug>
 
 namespace  QSynedit {
@@ -108,7 +109,7 @@ const QSet<QString> ASMSyntaxer::ATTDirectives {
     ".seh_setframe",".seh_stackalloc",".seh_pushreg",
     ".seh_savereg",".seh_savemm",".seh_savexmm",
     ".seh_pushframe",".seh_scope",
-#elif defined(Q_OS_LINUX)
+#else // Unix
     ".cfi_sections",".cfi_startproc",".cfi_endproc",
     ".cfi_personality",".cfi_personality_id",".cfi_fde_data",
     ".cfi_lsda",".cfi_inline_lsda",".cfi_def_cfa",
@@ -147,8 +148,9 @@ const QSet<QString> ASMSyntaxer::ATTDirectives {
     ".zero",".2byte",".4byte",".8byte"
 };
 
-ASMSyntaxer::ASMSyntaxer(bool isATT):
-    mATT(isATT)
+ASMSyntaxer::ASMSyntaxer(bool isATT, bool isCppMixed):
+    mATT{isATT},
+    mCppMixed{isCppMixed}
 {
     initData();
     mNumberAttribute = std::make_shared<TokenAttribute>(SYNS_AttrNumber, TokenType::Number);
@@ -344,7 +346,7 @@ void ASMSyntaxer::UnknownProc()
     mTokenID = TokenId::Unknown;
 }
 
-bool ASMSyntaxer::isIdentStartChar(const QChar &ch)
+bool ASMSyntaxer::isIdentStartChar(const QChar &ch) const
 {
     if (ch == '_') {
         return true;
@@ -1564,14 +1566,7 @@ void ASMSyntaxer::initData()
         Instructions.insert("vxorps",QObject::tr("Bitwise Logical XOR for Single-Precision Floating-Point Values."));
         Instructions.insert("vpclmulqdq",QObject::tr("Carry-Less Multiplication Quadword, Requires PCLMULQDQ CPUID-flag."));
 #endif
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
         InstructionNames=QSet<QString>(Instructions.keyBegin(),Instructions.keyEnd());
-#else
-        InstructionNames.clear();
-        foreach(const QString& s,Instructions.keys()) {
-            InstructionNames.insert(s);
-        }
-#endif
     }
 }
 
@@ -1661,7 +1656,7 @@ void ASMSyntaxer::next()
         SlashProc();
         break;
     case ';':
-        if (mATT) {
+        if (mATT || mCppMixed) {
             SymbolProc();
         } else
             CommentProc();
@@ -1670,14 +1665,14 @@ void ASMSyntaxer::next()
         CommentProc();
         break;
     case '.':
-        if (isIdentChar(mLine[mRun+1])) {
+        if (isIdentStartChar(mLine[mRun+1])) {
             mRun++;
             IdentProc(IdentPrefix::Period);
         } else
             SymbolProc();
         break;
     case '%':
-        if (isIdentChar(mLine[mRun+1])) {
+        if (isIdentStartChar(mLine[mRun+1])) {
             mRun++;
             IdentProc(IdentPrefix::Percent);
         } else
@@ -1699,7 +1694,7 @@ void ASMSyntaxer::next()
     default:
         if (mLine[mRun]>='0' && mLine[mRun]<='9') {
             NumberProc();
-        } else if (isIdentChar(mLine[mRun])) {
+        } else if (isIdentStartChar(mLine[mRun])) {
             IdentProc(IdentPrefix::None);
         } else if (mLine[mRun]<=32) {
             SpaceProc();
@@ -1712,25 +1707,20 @@ void ASMSyntaxer::next()
 void ASMSyntaxer::setLine(const QString &newLine, int lineNumber)
 {
     mLineString = newLine;
-    mLine = mLineString.data();
+    mLine = getNullTerminatedStringData(mLineString);
     mLineNumber = lineNumber;
     mRun = 0;
     next();
 }
 
-bool ASMSyntaxer::getTokenFinished() const
+bool ASMSyntaxer::isCommentNotFinished(int /*state*/) const
 {
-    return true;
+    return false;
 }
 
-bool ASMSyntaxer::isLastLineCommentNotFinished(int /*state*/) const
+bool ASMSyntaxer::isStringNotFinished(int /*state*/) const
 {
-    return true;
-}
-
-bool ASMSyntaxer::isLastLineStringNotFinished(int /*state*/) const
-{
-    return true;
+    return false;
 }
 
 SyntaxState ASMSyntaxer::getState() const
@@ -1748,6 +1738,16 @@ void ASMSyntaxer::setState(const SyntaxState&)
 void ASMSyntaxer::resetState()
 {
     mHasTrailingSpaces = false;
+}
+
+bool ASMSyntaxer::supportFolding()
+{
+    return false;
+}
+
+bool ASMSyntaxer::needsLineState()
+{
+    return true;
 }
 
 QSet<QString> ASMSyntaxer::keywords()

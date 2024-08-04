@@ -33,13 +33,16 @@ void CppPreprocessor::clear()
 
     //Result across processings.
     //used by parser even preprocess finished
-    mIncludesList.clear();
+    mFileInfos.clear();
     mFileDefines.clear(); //dictionary to save defines for each headerfile;
+    mFileUndefines.clear(); //dictionary to save undefines for each headerfile;
     mScannedFiles.clear();
 
     //option data for the parser
     //{ List of current project's include path }
-    mHardDefines.clear(); // set by "cpp -dM -E -xc NUL"
+    mHardDefines.clear();
+    mDefines.clear();
+    //mHardDefines.clear(); // set by "cpp -dM -E -xc NUL"
     mProjectIncludePaths.clear();
     //we also need include paths in order (for #include_next)
     mIncludePathList.clear();
@@ -54,10 +57,10 @@ void CppPreprocessor::clearTempResults()
     mFileName="";
     mBuffer.clear();
     mResult.clear();
-    mCurrentIncludes=nullptr;
-    mIncludes.clear(); // stack of files we've stepped into. last one is current file, first one is source file
+    mCurrentFileInfo=nullptr;
+    mIncludeStack.clear(); // stack of files we've stepped into. last one is current file, first one is source file
     mBranchResults.clear();// stack of branch results (boolean). last one is current branch, first one is outermost branch
-    mDefines.clear(); // working set, editable
+    //mDefines.clear(); // working set, editable
     mProcessed.clear(); // dictionary to save filename already processed
 }
 
@@ -72,11 +75,13 @@ void CppPreprocessor::addDefineByParts(const QString &name, const QString &args,
     //define->argList;
     define->formatValue = value;
     define->hardCoded = hardCoded;
+    define->varArgIndex = -1;
     if (!args.isEmpty())
         parseArgs(define);
-    if (hardCoded)
+    if (hardCoded) {
         mHardDefines.insert(name,define);
-    else {
+        mDefines.insert(name,define);
+    } else {
         PDefineMap defineMap = mFileDefines.value(mFileName,PDefineMap());
         if (!defineMap) {
             defineMap = std::make_shared<DefineMap>();
@@ -128,11 +133,9 @@ void CppPreprocessor::getDefineParts(const QString &input, QString &name, QStrin
         args = "";
     }
     value = removeGCCAttributes(s.mid(i+1).trimmed());
-}
-
-void CppPreprocessor::addHardDefineByLine(const QString &line)
-{
-    addDefineByLine(line,true);
+    name.squeeze();
+    value.squeeze();
+    args.squeeze();
 }
 
 void CppPreprocessor::addDefineByLine(const QString &line, bool hardCoded)
@@ -149,35 +152,38 @@ void CppPreprocessor::addDefineByLine(const QString &line, bool hardCoded)
     addDefineByParts(name, args, value, hardCoded);
 }
 
-void CppPreprocessor::setScanOptions(bool parseSystem, bool parseLocal)
-{
-    mParseSystem = parseSystem;
-    mParseLocal=parseLocal;
-}
 
 void CppPreprocessor::preprocess(const QString &fileName)
 {
     clearTempResults();
     mFileName = fileName;
-    mDefines = mHardDefines;
     openInclude(fileName);
-    //    StringsToFile(mBuffer,"f:\\buffer.txt");
     preprocessBuffer();
-    //    StringsToFile(mBuffer,"f:\\buffer.txt");
-    //    StringsToFile(mResult,"f:\\log.txt");
 }
 
 void CppPreprocessor::invalidDefinesInFile(const QString &fileName)
 {
+    //remove all defines defined in this file
     PDefineMap defineMap = mFileDefines.value(fileName,PDefineMap());
     if (defineMap) {
         foreach (const PDefine& define, *defineMap) {
             const PDefine& p = mDefines.value(define->name);
             if (p == define) {
                 mDefines.remove(define->name);
+                PDefine p2 = mHardDefines.value(define->name);
+                if (p2)
+                    mDefines.insert(define->name, p2);
             }
         }
         mFileDefines.remove(fileName);
+    }
+    //restore all defines undefined in this file
+    PDefineMap undefineMap = mFileUndefines.value(fileName,PDefineMap());
+    if (undefineMap) {
+        foreach (const PDefine& define, *undefineMap) {
+            mDefines.insert(define->name, define);
+        }
+        mFileUndefines.remove(fileName);
     }
 }
 
@@ -189,12 +195,7 @@ void CppPreprocessor::dumpDefinesTo(const QString &fileName) const
         for (const PDefine& define:mDefines) {
             stream<<QString("%1 %2 %3 %4 %5\n")
                     .arg(define->name,define->args,define->value)
-                    .arg(define->hardCoded).arg(define->formatValue)
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                 <<Qt::endl;
-#else
-                 <<endl;
-#endif
+                    .arg(define->hardCoded).arg(define->formatValue)<<Qt::endl;
         }
     }
 }
@@ -204,69 +205,11 @@ void CppPreprocessor::dumpIncludesListTo(const QString &fileName) const
     QFile file(fileName);
     if (file.open(QIODevice::WriteOnly|QIODevice::Truncate)) {
         QTextStream stream(&file);
-        for (const PFileIncludes& fileIncludes:mIncludesList) {
-            stream<<fileIncludes->baseFile<<" : "
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            stream<<"\t**includes:**"
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            foreach (const QString& s,fileIncludes->includeFiles.keys()) {
-                stream<<"\t--"+s
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            }
-            stream<<"\t**depends on:**"
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            stream<<"\t**depended by:**"
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            stream<<"\t**using:**"
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            foreach (const QString& s,fileIncludes->usings) {
-                stream<<"\t++"+s
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            }
-            stream<<"\t**statements:**"
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-            foreach (const PStatement& statement,fileIncludes->statements) {
-                if (statement) {
-                    stream<<QString("\t**%1 , %2")
-                            .arg(statement->command,statement->fullName)
-        #if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-                         <<Qt::endl;
-        #else
-                         <<endl;
-        #endif
-                }
+        for (const PParsedFileInfo& fileInfo:mFileInfos) {
+            stream<<fileInfo->fileName()<<" : "<<Qt::endl;
+            stream<<"\t**includes:**"<<Qt::endl;
+            foreach (const QString& s,fileInfo->includes()) {
+                stream<<"\t--"+s<<Qt::endl;
             }
         }
     }
@@ -288,23 +231,13 @@ void CppPreprocessor::addProjectIncludePath(const QString &fileName)
     }
 }
 
-void CppPreprocessor::clearIncludePaths()
-{
-    mIncludePaths.clear();
-    mIncludePathList.clear();
-}
-
-void CppPreprocessor::clearProjectIncludePaths()
-{
-    mProjectIncludePaths.clear();
-    mProjectIncludePathList.clear();
-}
-
 void CppPreprocessor::removeScannedFile(const QString &filename)
 {
+    invalidDefinesInFile(filename);
     mScannedFiles.remove(filename);
-    mIncludesList.remove(filename);
+    mFileInfos.remove(filename);
     mFileDefines.remove(filename);
+    mFileUndefines.remove(filename);
 }
 
 QString CppPreprocessor::getNextPreprocessor()
@@ -323,7 +256,7 @@ QString CppPreprocessor::getNextPreprocessor()
     QString result;
     for (int i=preProcFrom;i<=preProcTo;i++) {
         if (mBuffer[i].endsWith('\\')) {
-            result+=mBuffer[i].leftRef(mBuffer[i].size()-1)+' ';
+            result+=mBuffer[i].left(mBuffer[i].size()-1)+' ';
         } else {
             result+=mBuffer[i]+' ';
         }
@@ -344,12 +277,12 @@ void CppPreprocessor::handleBranch(const QString &line)
 //                return;
 //            }
 //        }
-        if (!getCurrentBranch()) {
-            setCurrentBranch(false);
+        if (getCurrentBranch()!=BranchResult::isTrue) {
+            setCurrentBranch(BranchResult::parentIsFalse);
         } else {
             constexpr int IFDEF_LEN = 5; //length of ifdef;
             QString name = line.mid(IFDEF_LEN).trimmed();
-            setCurrentBranch( getDefine(name)!=nullptr );
+            setCurrentBranch( getDefine(name)!=nullptr?(BranchResult::isTrue):(BranchResult::isFalse) );
 
         }
     } else if (line.startsWith("ifndef")) {
@@ -360,12 +293,12 @@ void CppPreprocessor::handleBranch(const QString &line)
 //                return;
 //            }
 //        }
-        if (!getCurrentBranch()) {
-            setCurrentBranch(false);
+        if (getCurrentBranch()!=BranchResult::isTrue) {
+            setCurrentBranch(BranchResult::parentIsFalse);
         } else {
             constexpr int IFNDEF_LEN = 6; //length of ifndef;
             QString name = line.mid(IFNDEF_LEN).trimmed();
-            setCurrentBranch( getDefine(name)==nullptr );
+            setCurrentBranch( getDefine(name)==nullptr?(BranchResult::isTrue):(BranchResult::isFalse) );
         }
     } else if (line.startsWith("if")) {
         //        // if a branch that is not at our level is false, current branch is false too;
@@ -375,29 +308,30 @@ void CppPreprocessor::handleBranch(const QString &line)
         //                return;
         //            }
         //        }
-        if (!getCurrentBranch()) {// we are already inside an if that is NOT being taken
-            setCurrentBranch(false);// so don't take this one either
+        if (getCurrentBranch()!=BranchResult::isTrue) {// we are already inside an if that is NOT being taken
+            setCurrentBranch(BranchResult::parentIsFalse);// so don't take this one either
         } else {
             constexpr int IF_LEN = 2; //length of if;
             QString ifLine = line.mid(IF_LEN).trimmed();
 
             bool testResult = evaluateIf(ifLine);
-            setCurrentBranch(testResult);
+            setCurrentBranch(testResult?(BranchResult::isTrue):(BranchResult::isFalse));
         }
     } else if (line.startsWith("else")) {
-        bool oldResult = getCurrentBranch(); // take either if or else
+        BranchResult oldResult = getCurrentBranch(); // take either if or else
         removeCurrentBranch();
-        setCurrentBranch(!oldResult);
+        setCurrentBranch(calcElseBranchResult(oldResult));
     } else if (line.startsWith("elif")) {
-        bool oldResult = getCurrentBranch(); // take either if or else
+        BranchResult oldResult = getCurrentBranch(); // take either if or else
         removeCurrentBranch();
-        if (oldResult) { // don't take this one, if  previous has been taken
-            setCurrentBranch(false);
-        } else {
+        BranchResult elseResult = calcElseBranchResult(oldResult);
+        if (elseResult == BranchResult::isTrue) { // don't take this one, if  previous has been taken
             constexpr int ELIF_LEN = 4; //length of if;
             QString ifLine = line.mid(ELIF_LEN).trimmed();
             bool testResult = evaluateIf(ifLine);
-            setCurrentBranch(testResult);
+            setCurrentBranch(testResult?(BranchResult::isTrue):(BranchResult::isFalse));
+        } else {
+            setCurrentBranch(elseResult);
         }
     } else if (line.startsWith("endif")) {
         removeCurrentBranch();
@@ -406,7 +340,7 @@ void CppPreprocessor::handleBranch(const QString &line)
 
 void CppPreprocessor::handleDefine(const QString &line)
 {
-    if (getCurrentBranch()) {
+    if (getCurrentBranch() == BranchResult::isTrue) {
         addDefineByLine(line, false);
         mResult[mPreProcIndex] = '#' + line; // add define to result file so the parser can handle it
     }
@@ -414,10 +348,10 @@ void CppPreprocessor::handleDefine(const QString &line)
 
 void CppPreprocessor::handleInclude(const QString &line, bool fromNext)
 {
-    if (!getCurrentBranch()) // we're skipping due to a branch failure
+    if (getCurrentBranch()!=BranchResult::isTrue) // we're skipping due to a branch failure
         return;
 
-    PParsedFile file = mIncludes.back();
+    PParsedFile file = mIncludeStack.back();
     QString fileName;
     // Get full header file name
     QString currentDir = includeTrailingPathDelimiter(extractFileDir(file->fileName));
@@ -446,16 +380,34 @@ void CppPreprocessor::handleInclude(const QString &line, bool fromNext)
         includes = mIncludePathList;
         projectIncludes = mProjectIncludePathList;
     }
+
+    int i=1; // skip '#'
+    int len=line.length();
+    //skip spaces
+    while (i<len && isSpaceChar(line[i]))
+        i++;
+    //skip 'include'
+    while (i<len && isIdentChar(line[i]))
+        i++;
+    //skip spaces
+    while (i<len && isSpaceChar(line[i]))
+        i++;
+    if (i>=line.length())
+        return;
+    QString s=line.mid(i);
+    QSet<QString> usedMacros;
+    s = expandMacros(s, usedMacros);
+
     fileName = getHeaderFilename(
                 file->fileName,
-                line,
+                s,
                 includes,
                 projectIncludes);
 
     if (fileName.isEmpty())
         return;
 
-    PFileIncludes oldCurrentIncludes = mCurrentIncludes;
+    PParsedFileInfo oldCurrentIncludes = mCurrentFileInfo;
     openInclude(fileName);
 }
 
@@ -497,42 +449,48 @@ void CppPreprocessor::handleUndefine(const QString &line)
     if (define) {
         //remove the define from defines set
         mDefines.remove(name);
-        //remove the define form the file where it defines
         if (define->filename == mFileName) {
+            //remove the define form the file where it defines
             PDefineMap defineMap = mFileDefines.value(mFileName);
             if (defineMap) {
                 defineMap->remove(name);
             }
+        } else {
+            // add it to undefine map
+            PDefineMap undefineMap = mFileUndefines.value(mFileName);
+            if (!undefineMap) {
+                undefineMap = std::make_shared<DefineMap>();
+                mFileUndefines.insert(mFileName,undefineMap);
+            }
+            if (!undefineMap->contains(name))
+                undefineMap->insert(name, define);
         }
     }
 }
 
-QString CppPreprocessor::expandMacros(const QString &line, int depth)
+QString CppPreprocessor::expandMacros(const QString &text, QSet<QString> usedMacros) const
 {
-    //prevent infinit recursion
-    if (depth > MAX_DEFINE_EXPAND_DEPTH)
-        return line;
     QString word;
     QString newLine;
-    int lenLine = line.length();
+    int lenLine = text.length();
     int i=0;
     while (i< lenLine) {
-        QChar ch=line[i];
+        QChar ch=text[i];
         if (isWordChar(ch)) {
             word += ch;
         } else {
             if (!word.isEmpty()) {
-                expandMacro(line,newLine,word,i,depth);
+                expandMacro(text,newLine,word,i,usedMacros);
             }
             word = "";
             if (i< lenLine) {
-                newLine += line[i];
+                newLine += text[i];
             }
         }
         i++;
     }
     if (!word.isEmpty()) {
-        expandMacro(line,newLine,word,i,depth);
+        expandMacro(text,newLine,word,i, usedMacros);
     }
     return newLine;
 }
@@ -543,6 +501,7 @@ QString CppPreprocessor::expandMacros()
     QString word;
     QString newLine;
     QString line = mBuffer[mIndex];
+    QSet<QString> usedMacros;
     int i=0;
     while (mIndex < mBuffer.size() && i<line.length()) {
         QChar ch=line[i];
@@ -550,7 +509,7 @@ QString CppPreprocessor::expandMacros()
             word += ch;
         } else {
             if (!word.isEmpty()) {
-                expandMacro(newLine,word,i,1);
+                expandMacro(newLine,word,i,usedMacros);
                 if (mIndex>=mBuffer.length())
                     return newLine;
                 line = mBuffer[mIndex];
@@ -563,75 +522,79 @@ QString CppPreprocessor::expandMacros()
         i++;
     }
     if (!word.isEmpty()) {
-        expandMacro(newLine,word,i,1);
+        expandMacro(newLine,word,i,usedMacros);
     }
     return newLine;
 }
 
-void CppPreprocessor::expandMacro(const QString &line, QString &newLine, QString &word, int &i, int depth)
+void CppPreprocessor::expandMacro(const QString &text, QString &newText, const QString &word, int &i, QSet<QString> usedMacros) const
 {
-    int lenLine = line.length();
-        PDefine define = getDefine(word);
-        if (define && define->args=="" ) {
-            if (define->value != word )
-              newLine += expandMacros(define->value,depth+1);
-            else
-              newLine += word;
-
-        } else if (define && (define->args!="")) {
-            while ((i<lenLine) && (line[i] == ' ' || line[i]=='\t'))
+    if (usedMacros.contains(word))
+        return;
+    int lenLine = text.length();
+    PDefine define = getDefine(word);
+    if (define && define->args=="" ) {
+        usedMacros.insert(word);
+        if (define->value != word ) {
+            newText += expandMacros(define->value,usedMacros);
+        } else
+            newText += word;
+    } else if (define && (define->args!="")) {
+        while ((i<lenLine) && (text[i] == ' ' || text[i]=='\t'))
+            i++;
+        int argStart=-1;
+        int argEnd=-1;
+        if ((i<lenLine) && (text[i]=='(')) {
+            argStart =i+1;
+            int level=0;
+            bool inString=false;
+            while (i<lenLine) {
+                switch(text[i].unicode()) {
+                case '\\':
+                    if (inString)
+                        i++;
+                break;
+                case '"':
+                    inString = !inString;
+                break;
+                case '(':
+                    if (!inString)
+                        level++;
+                break;
+                case ')':
+                    if (!inString)
+                        level--;
+                }
                 i++;
-            int argStart=-1;
-            int argEnd=-1;
-            if ((i<lenLine) && (line[i]=='(')) {
-                argStart =i+1;
-                int level=0;
-                bool inString=false;
-                while (i<lenLine) {
-                    switch(line[i].unicode()) {
-                    case '\\':
-                        if (inString)
-                            i++;
+                if (level==0)
                     break;
-                    case '"':
-                        inString = !inString;
-                    break;
-                    case '(':
-                        if (!inString)
-                            level++;
-                    break;
-                    case ')':
-                        if (!inString)
-                            level--;
-                    }
-                    i++;
-                    if (level==0)
-                        break;
-                }
-                if (level==0) {
-                    argEnd = i-2;
-                    QString args = line.mid(argStart,argEnd-argStart+1).trimmed();
-                    QString formattedValue = expandFunction(define,args);
-                    newLine += expandMacros(formattedValue,depth+1);
-                }
             }
-        } else {
-            newLine += word;
+            if (level==0) {
+                argEnd = i-2;
+                QString args = text.mid(argStart,argEnd-argStart+1).trimmed();
+                QString formattedValue = expandFunction(define,args);
+                usedMacros.insert(word);
+                newText += expandMacros(formattedValue,usedMacros);
+            }
         }
-        //    }
+    } else {
+        newText += word;
+    }
+    //    }
 }
 
-void CppPreprocessor::expandMacro(QString &newLine, QString &word, int &i, int depth)
+void CppPreprocessor::expandMacro(QString &newLine, const QString &word, int &i, QSet<QString> usedMacros)
 {
+    if (usedMacros.contains(word))
+        return;
     QString line = mBuffer[mIndex];
     PDefine define = getDefine(word);
-//    if (define && define->name == "DEFHOOKPODX")
-//        qDebug()<<define->args<<define->argList<<define->formatValue;
     if (define && define->args=="" ) {
+        usedMacros.insert(word);
         if (define->value != word )
-          newLine += expandMacros(define->value,depth+1);
+            newLine += expandMacros(define->value,usedMacros);
         else
-          newLine += word;
+            newLine += word;
     } else if (define && (define->args!="")) {
         int origI=i;
         int origIndex=mIndex;
@@ -701,13 +664,10 @@ void CppPreprocessor::expandMacro(QString &newLine, QString &word, int &i, int d
                         args += mBuffer[i];
                     }
                     args += mBuffer[argLineEnd].left(argEnd);
-//                    if (define && define->name == "DEFHOOK")
-//                        qDebug()<<args;
                 }
                 QString formattedValue = expandFunction(define,args);
-//                if (define && define->name == "DEFHOOKPODX")
-//                    qDebug()<<formattedValue;
-                newLine += expandMacros(formattedValue,depth+1);
+                usedMacros.insert(word);
+                newLine += expandMacros(formattedValue,usedMacros);
             }
         } else {
             newLine+=word;
@@ -770,36 +730,34 @@ void CppPreprocessor::removeGCCAttribute(const QString &line, QString &newLine, 
     }
 }
 
-void CppPreprocessor::openInclude(const QString &fileName)
+void CppPreprocessor::openInclude(QString fileName)
 {
-    if (mIncludes.size()>0) {
-        PParsedFile topFile = mIncludes.front();
-        if (topFile->fileIncludes->includeFiles.contains(fileName)) {
-            return; //already included
+    PParsedFileInfo fileInfo = findFileInfo(fileName);
+    if (fileInfo) {
+        fileName = fileInfo->fileName();
+    } else {
+        fileName.squeeze();
+        fileInfo = std::make_shared<ParsedFileInfo>(fileName);
+    }
+    if (mIncludeStack.size()>0) {
+        bool alreadyIncluded = false;
+        for (PParsedFile& parsedFile:mIncludeStack) {
+            if (parsedFile->fileInfo->including(fileName)) {
+                alreadyIncluded = true;
+            }
+            parsedFile->fileInfo->addInclude(fileName);
+            foreach (const QString& includedFileName,fileInfo->includes()) {
+                parsedFile->fileInfo->addInclude(includedFileName);
+            }
         }
-        for (PParsedFile& parsedFile:mIncludes) {
-            parsedFile->fileIncludes->includeFiles.insert(fileName,false);
-        }
+        PParsedFile innerMostFile = mIncludeStack.back();
+        innerMostFile->fileInfo->addDirectInclude(fileName);
+        if (alreadyIncluded)
+            return;
         // Backup old position if we're entering a new file
-        PParsedFile innerMostFile = mIncludes.back();
         innerMostFile->index = mIndex;
         innerMostFile->branches = mBranchResults.count();
-
-        innerMostFile->fileIncludes->includeFiles.insert(fileName,true);
-        innerMostFile->fileIncludes->directIncludes.append(fileName);
     }
-
-//    // Add the new file to the includes of the current file
-//    // Only add items to the include list of the given file if the file hasn't been scanned yet
-//    // The above is fixed by checking for duplicates.
-//    // The proper way would be to do backtracking of files we have FINISHED scanned.
-//    // These are not the same files as the ones in fScannedFiles. We have STARTED scanning these.
-//    {
-//    if Assigned(fCurrentIncludes) then
-//      with fCurrentIncludes^ do
-//        if not ContainsText(IncludeFiles, FileName) then
-//          IncludeFiles := IncludeFiles + AnsiQuotedStr(FileName, '"') + ',';
-//    }
 
     // Create and add new buffer/position
     PParsedFile parsedFile = std::make_shared<ParsedFile>();
@@ -811,15 +769,9 @@ void CppPreprocessor::openInclude(const QString &fileName)
 
     // Keep track of files we include here
     // Only create new items for files we have NOT scanned yet
-    mCurrentIncludes = getFileIncludesEntry(fileName);
-    if (!mCurrentIncludes) {
-        // do NOT create a new item for a file that's already in the list
-        mCurrentIncludes = std::make_shared<FileIncludes>();
-        mCurrentIncludes->baseFile = fileName;
-        mIncludesList.insert(fileName,mCurrentIncludes);
-    }
-
-    parsedFile->fileIncludes = mCurrentIncludes;
+    mCurrentFileInfo = fileInfo;
+    mFileInfos.insert(fileName,mCurrentFileInfo);
+    parsedFile->fileInfo = mCurrentFileInfo;
 
     // Don't parse stuff we have already parsed
     if (!mScannedFiles.contains(fileName)) {
@@ -840,14 +792,8 @@ void CppPreprocessor::openInclude(const QString &fileName)
     } else {
         //add defines of already parsed including headers;
         addDefinesInFile(fileName);
-        PFileIncludes fileIncludes = getFileIncludesEntry(fileName);
-        for (PParsedFile& file:mIncludes) {
-            foreach (const QString& incFile,fileIncludes->includeFiles.keys()) {
-                file->fileIncludes->includeFiles.insert(incFile,false);
-            }
-        }
     }
-    mIncludes.append(parsedFile);
+    mIncludeStack.append(parsedFile);
 
     // Process it
     mIndex = parsedFile->index;
@@ -861,7 +807,7 @@ void CppPreprocessor::openInclude(const QString &fileName)
 
     // Update result file
     QString includeLine = "#include " + fileName + ":1";
-    if (mIncludes.count()>1) { // include from within a file
+    if (mIncludeStack.count()>1) { // include from within a file
       mResult[mPreProcIndex] = includeLine;
     } else {
       mResult.append(includeLine);
@@ -871,13 +817,13 @@ void CppPreprocessor::openInclude(const QString &fileName)
 
 void CppPreprocessor::closeInclude()
 {
-    if (mIncludes.isEmpty())
+    if (mIncludeStack.isEmpty())
         return;
-    mIncludes.pop_back();
+    mIncludeStack.pop_back();
 
-    if (mIncludes.isEmpty())
+    if (mIncludeStack.isEmpty())
         return;
-    PParsedFile parsedFile = mIncludes.back();
+    PParsedFile parsedFile = mIncludeStack.back();
 
     // Continue where we left off
     mIndex = parsedFile->index;
@@ -890,13 +836,24 @@ void CppPreprocessor::closeInclude()
 
 
     // Start augmenting previous include list again
-    //fCurrentIncludes := GetFileIncludesEntry(fFileName);
-    mCurrentIncludes = parsedFile->fileIncludes;
+    mCurrentFileInfo = parsedFile->fileInfo;
 
     // Update result file (we've left the previous file)
     mResult.append(
                 QString("#include %1:%2").arg(parsedFile->fileName)
                 .arg(parsedFile->index+1));
+}
+
+CppPreprocessor::BranchResult CppPreprocessor::calcElseBranchResult(BranchResult oldResult)
+{
+    switch(oldResult) {
+    case BranchResult::isTrue: return BranchResult::isFalse_but_trued;
+    case BranchResult::isFalse: return BranchResult::isTrue;
+    case BranchResult::isFalse_but_trued: return BranchResult::isFalse_but_trued;
+    case BranchResult::parentIsFalse: return BranchResult::parentIsFalse;
+    }
+    Q_ASSERT( false ); //We should fail here.
+    return BranchResult::isFalse;
 }
 
 void CppPreprocessor::addDefinesInFile(const QString &fileName)
@@ -913,9 +870,11 @@ void CppPreprocessor::addDefinesInFile(const QString &fileName)
         }
     }
 
-    PFileIncludes fileIncludes = getFileIncludesEntry(fileName);
-    foreach (const QString& file, fileIncludes->includeFiles.keys()) {
-        addDefinesInFile(file);
+    PParsedFileInfo fileInfo = findFileInfo(fileName);
+    if (fileInfo) {
+        foreach (const QString& file, fileInfo->includes()) {
+            addDefinesInFile(file);
+        }
     }
 }
 
@@ -925,9 +884,9 @@ void CppPreprocessor::parseArgs(PDefine define)
 
     if(args=="")
         return ;
-    define->argList = args.split(',');
-    for (int i=0;i<define->argList.size();i++) {
-        define->argList[i]=define->argList[i].trimmed();
+    QStringList argList = args.split(',');
+    for (int i=0;i<argList.size();i++) {
+        argList[i]=argList[i].trimmed();
         define->argUsed.append(false);
     }
     QList<PDefineArgToken> tokens = tokenizeValue(define->value);
@@ -938,7 +897,12 @@ void CppPreprocessor::parseArgs(PDefine define)
     foreach (const PDefineArgToken& token, tokens) {
         switch(token->type) {
         case DefineArgTokenType::Identifier:
-            index = define->argList.indexOf(token->value);
+            if (token->value == "__VA_ARGS__") {
+                index = argList.indexOf("...");
+                define->varArgIndex = index;
+            } else {
+                index = argList.indexOf(token->value);
+            }
             if (index>=0) {
                 define->argUsed[index] = true;
                 if (lastTokenType == DefineArgTokenType::Sharp) {
@@ -964,6 +928,7 @@ void CppPreprocessor::parseArgs(PDefine define)
         lastTokenType = token->type;
     }
     define->formatValue = formatStr;
+    define->formatValue.squeeze();
 }
 
 QList<PDefineArgToken> CppPreprocessor::tokenizeValue(const QString &value)
@@ -1072,7 +1037,7 @@ QStringList CppPreprocessor::removeComments(const QStringList &text)
                     currentType=ContentType::Other;
                     break;
                 case ContentType::RawString:
-                    if (line.midRef(0,pos).endsWith(')'+delimiter))
+                    if (QStringView(line.constData(), pos).endsWith(')'+delimiter))
                         currentType = ContentType::Other;
                     break;
                 case ContentType::Other:
@@ -1169,7 +1134,7 @@ QStringList CppPreprocessor::removeComments(const QStringList &text)
 
 void CppPreprocessor::preprocessBuffer()
 {
-    while (mIncludes.count() > 0) {
+    while (mIncludeStack.count() > 0) {
         QString s;
         do {
             s = getNextPreprocessor();
@@ -1197,7 +1162,7 @@ void CppPreprocessor::skipToPreprocessor()
     int bufferCount = mBuffer.count();
 // Increment until a line begins with a #
     while ((mIndex < bufferCount) && !mBuffer[mIndex].startsWith('#')) {
-        if (getCurrentBranch()) { // if not skipping, expand current macros
+        if (getCurrentBranch()==BranchResult::isTrue) { // if not skipping, expand current macros
             int startIndex = mIndex;
             QString expanded = expandMacros();
             mResult.append(expanded);
@@ -1209,71 +1174,6 @@ void CppPreprocessor::skipToPreprocessor()
             mResult.append("");
         mIndex++;
     }
-}
-
-bool CppPreprocessor::isWordChar(const QChar &ch)
-{
-    if (ch=='_'
-            // || (ch>='a' && ch<='z') || (ch>='A' && ch<='Z')
-            || ch.isLetter()
-            || (ch>='0' && ch<='9')) {
-        return true;
-    }
-    return false;
-}
-
-bool CppPreprocessor::isIdentChar(const QChar &ch)
-{
-    if (ch=='_' || ch == '*' || ch == '&' || ch == '~' ||
-            ch.isLetter()
-            //(ch>='a' && ch<='z') || (ch>='A' && ch<='Z')
-            || (ch>='0' && ch<='9')) {
-        return true;
-    }
-    return false;
-}
-
-bool CppPreprocessor::isLineChar(const QChar &ch)
-{
-    return ch=='\r' || ch == '\n';
-}
-
-bool CppPreprocessor::isSpaceChar(const QChar &ch)
-{
-    return ch == ' ' || ch == '\t';
-}
-
-//bool CppPreprocessor::isOperatorChar(const QChar &ch)
-//{
-
-//    switch(ch.unicode()) {
-//    case '+':
-//    case '-':
-//    case '*':
-//    case '/':
-//    case '!':
-//    case '=':
-//    case '<':
-//    case '>':
-//    case '&':
-//    case '|':
-//    case '^':
-//        return true;
-//    default:
-//        return false;
-//    }
-//}
-
-bool CppPreprocessor::isMacroIdentChar(const QChar &ch)
-{
-    //return (ch>='A' && ch<='Z') || (ch>='a' && ch<='z')
-    return ch.isLetter()
-            || ch == '_';
-}
-
-bool CppPreprocessor::isDigit(const QChar &ch)
-{
-    return (ch>='0' && ch<='9');
 }
 
 bool CppPreprocessor::isNumberChar(const QChar &ch)
@@ -1295,11 +1195,6 @@ bool CppPreprocessor::isNumberChar(const QChar &ch)
     default:
         return false;
     }
-}
-
-QString CppPreprocessor::lineBreak()
-{
-    return "\n";
 }
 
 bool CppPreprocessor::evaluateIf(const QString &line)
@@ -1337,7 +1232,7 @@ QString CppPreprocessor::expandDefines(QString line)
                 if ((tail < line.length()) && (line[tail]=='(')) {
                     //braced argument (next word)
                     defineStart = tail+1;
-                    if (!skipBraces(line, tail)) {
+                    if (!skipParenthesis(line, tail)) {
                         line = ""; // broken line
                         break;
                     }
@@ -1378,10 +1273,13 @@ QString CppPreprocessor::expandDefines(QString line)
                     // It is a function. Expand arguments
                     if ((tail < line.length()) && (line[tail] == '(')) {
                         head=tail;
-                        if (skipBraces(line, tail)) {
-//                            qDebug()<<"3 "<<line<<head<<tail;
-                            QString args = line.mid(head,tail-head+1);
-                            insertValue = expandFunction(define,args);
+                        if (skipParenthesis(line, tail)) {
+                            if (name == "__has_builtin") {
+                                insertValue = "0";
+                            } else {
+                                QString args = line.mid(head+1,tail-head-1);
+                                insertValue = expandFunction(define,args);
+                            }
                             nameEnd = tail+1;
                         } else {
                             line = "";// broken line
@@ -1406,7 +1304,7 @@ QString CppPreprocessor::expandDefines(QString line)
     return line;
 }
 
-bool CppPreprocessor::skipBraces(const QString &line, int &index, int step)
+bool CppPreprocessor::skipParenthesis(const QString &line, int &index, int step)
 {
     int level = 0;
     while ((index >= 0) && (index < line.length())) { // Find the corresponding opening brace
@@ -1422,43 +1320,88 @@ bool CppPreprocessor::skipBraces(const QString &line, int &index, int step)
     return false;
 }
 
-QString CppPreprocessor::expandFunction(PDefine define, QString args)
+QString CppPreprocessor::expandFunction(PDefine define, const QString &args)
 {
     // Replace function by this string
     QString result = define->formatValue;
-    if (args.startsWith('(') && args.endsWith(')')) {
-        args = args.mid(1,args.length()-2);
-    }
+//    if (args.startsWith('(') && args.endsWith(')')) {
+//        qDebug()<<define->name<<args;
+//        args = args.mid(1,args.length()-2);
+//    }
 
-    QStringList argValues;
-    int i=0;
-    bool inString = false;
-    int lastSplit=0;
-    while (i<args.length()) {
-        switch(args[i].unicode()) {
+    if (define->argUsed.length()==0) {
+        // do nothing
+    } else if (define->argUsed.length()==1) {
+        if (define->argUsed[0])
+            result=result.arg(args);
+    } else {
+        QStringList argValues;
+        int i=0;
+        bool inString = false;
+        bool inChar = false;
+        int lastSplit=0;
+        int level=0;
+        while (i<args.length()) {
+            switch(args[i].unicode()) {
             case '\\':
-                if (inString)
+                if (inString || inChar)
                     i++;
             break;
+            case '(':
+            case '{':
+                if (!inString && !inChar)
+                    level++;
+                break;
+            case ')':
+            case '}':
+                if (!inString && !inChar)
+                    level--;
+                break;
             case '"':
-                inString = !inString;
+                if (!inChar)
+                    inString = !inString;
             break;
+            case '\'':
+                if (!inString)
+                    inChar = !inChar;
+                break;
             case ',':
-                if (!inString) {
+                if (!inString && !inChar && level == 0) {
                     argValues.append(args.mid(lastSplit,i-lastSplit));
                     lastSplit=i+1;
                 }
             break;
+            }
+            i++;
         }
-        i++;
-    }
-    argValues.append(args.mid(lastSplit,i-lastSplit));
-    if (argValues.length() == define->argList.length()
-            && argValues.length()>0) {
-        for (int i=0;i<argValues.length();i++) {
-            if (define->argUsed[i]) {
-                QString argValue = argValues[i];
-                result=result.arg(argValue.trimmed());
+        argValues.append(args.mid(lastSplit,i-lastSplit));
+#ifdef QT_DEBUG
+        if (
+                (define->varArgIndex==-1 && argValues.length() != define->argUsed.length())
+                || (define->varArgIndex!=-1 && argValues.length() < define->argUsed.length()-1)
+                ) {
+            qDebug()<<"*** Expand Macro error ***";
+            qDebug()<<"Macro: "<<define->name<<define->args;
+            qDebug()<<"Actual param: "<<args;
+            qDebug()<<"Params splitted: "<<argValues;
+            qDebug()<<"**********";
+        }
+#endif
+        if (argValues.length() >= define->argUsed.length()
+                && argValues.length()>0) {
+            QStringList varArgs;
+            for (int i=0;i<argValues.length();i++) {
+                if (define->varArgIndex != -1
+                     && i >= define->varArgIndex ) {
+                    varArgs.append(argValues[i].trimmed());
+                } else if (i<define->argUsed.length()
+                            && define->argUsed[i]) {
+                    QString argValue = argValues[i];
+                    result=result.arg(argValue.trimmed());
+                }
+            }
+            if (!varArgs.isEmpty() && define->varArgIndex != -1) {
+                result=result.arg(varArgs.join(","));
             }
         }
     }
@@ -1920,47 +1863,4 @@ int CppPreprocessor::evaluateExpression(QString line)
     return result;
 }
 
-void CppPreprocessor::setOnGetFileStream(const GetFileStreamCallBack &newOnGetFileStream)
-{
-    mOnGetFileStream = newOnGetFileStream;
-}
 
-const QList<QString> &CppPreprocessor::projectIncludePathList() const
-{
-    return mProjectIncludePathList;
-}
-
-const QList<QString> &CppPreprocessor::includePathList() const
-{
-    return mIncludePathList;
-}
-
-const DefineMap &CppPreprocessor::hardDefines() const
-{
-    return mHardDefines;
-}
-
-const QSet<QString> &CppPreprocessor::projectIncludePaths()
-{
-    return mProjectIncludePaths;
-}
-
-const QSet<QString> &CppPreprocessor::includePaths()
-{
-    return mIncludePaths;
-}
-
-QSet<QString> &CppPreprocessor::scannedFiles()
-{
-    return mScannedFiles;
-}
-
-QHash<QString, PFileIncludes> &CppPreprocessor::includesList()
-{
-    return mIncludesList;
-}
-
-const QHash<QString, PFileIncludes> &CppPreprocessor::includesList() const
-{
-    return mIncludesList;
-}

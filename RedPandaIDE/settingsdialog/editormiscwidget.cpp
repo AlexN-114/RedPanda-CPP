@@ -64,8 +64,6 @@ void EditorMiscWidget::doLoad()
         }
         ui->cbEncodingDetail->setCurrentText(defaultEncoding);
     }
-    ui->spinMaxUndo->setValue(pSettings->editor().undoLimit());
-    ui->spinMaxUndoMemory->setValue(pSettings->editor().undoMemoryUsage());
     if (pSettings->editor().removeTrailingSpacesWhenSaved())
         ui->rbRemoveTrailingSpaces->setChecked(true);
     else if (pSettings->editor().autoFormatWhenSaved())
@@ -88,8 +86,6 @@ void EditorMiscWidget::doSave()
     } else {
         pSettings->editor().setDefaultEncoding(ui->cbEncoding->currentData().toByteArray());
     }
-    pSettings->editor().setUndoLimit(ui->spinMaxUndo->value());
-    pSettings->editor().setUndoMemoryUsage(ui->spinMaxUndoMemory->value());
     pSettings->editor().setAutoFormatWhenSaved(ui->rbAutoReformat->isChecked());
     pSettings->editor().setRemoveTrailingSpacesWhenSaved(ui->rbRemoveTrailingSpaces->isChecked());
     pSettings->editor().setParseTodos(ui->chkParseTodos->isChecked());
@@ -103,7 +99,7 @@ void EditorMiscWidget::init()
 {
     ui->cbEncodingDetail->setVisible(false);
     ui->cbEncoding->clear();
-    ui->cbEncoding->addItem(tr("ANSI"),ENCODING_SYSTEM_DEFAULT);
+    ui->cbEncoding->addItem(tr("System Default(%1)").arg(QString(pCharsetInfoManager->getDefaultSystemEncoding())),ENCODING_SYSTEM_DEFAULT);
     ui->cbEncoding->addItem(tr("UTF-8"),ENCODING_UTF8);
     ui->cbEncoding->addItem(tr("UTF-8 BOM"),ENCODING_UTF8_BOM);
     foreach (const QString& langName, pCharsetInfoManager->languageNames()) {

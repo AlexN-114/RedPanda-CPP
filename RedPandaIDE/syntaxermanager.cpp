@@ -17,15 +17,14 @@
 #include "syntaxermanager.h"
 #include <QFileInfo>
 #include <QObject>
-#include "qsynedit/constants.h"
 #include "qsynedit/syntaxer/cpp.h"
 #include "qsynedit/syntaxer/asm.h"
 #include "qsynedit/syntaxer/glsl.h"
 #include "qsynedit/syntaxer/lua.h"
 #include "qsynedit/syntaxer/makefile.h"
+#include "qsynedit/syntaxer/textfile.h"
 #include "qsynedit/formatter/cppformatter.h"
 
-#include "qsynedit/constants.h"
 #include "colorscheme.h"
 
 SyntaxerManager syntaxerManager;
@@ -44,6 +43,10 @@ QSynedit::PSyntaxer SyntaxerManager::getSyntaxer(QSynedit::ProgrammingLanguage l
         return std::make_shared<QSynedit::ASMSyntaxer>();
     case QSynedit::ProgrammingLanguage::ATTAssembly:
         return std::make_shared<QSynedit::ASMSyntaxer>(true);
+    case QSynedit::ProgrammingLanguage::MixedAssembly:
+        return std::make_shared<QSynedit::ASMSyntaxer>(false, true);
+    case QSynedit::ProgrammingLanguage::MixedATTAssembly:
+        return std::make_shared<QSynedit::ASMSyntaxer>(true, true);
     case QSynedit::ProgrammingLanguage::Makefile:
         return std::make_shared<QSynedit::MakefileSyntaxer>();
     case QSynedit::ProgrammingLanguage::GLSL:
@@ -57,7 +60,7 @@ QSynedit::PSyntaxer SyntaxerManager::getSyntaxer(QSynedit::ProgrammingLanguage l
         return syntaxer;
     }
     default:
-        return QSynedit::PSyntaxer();
+        return std::make_shared<QSynedit::TextSyntaxer>();
     }
 }
 
@@ -108,7 +111,7 @@ QSynedit::ProgrammingLanguage SyntaxerManager::getLanguage(const QString &filena
     } else if (suffix.isEmpty()) {
         return QSynedit::ProgrammingLanguage::CPP;
     }
-    return QSynedit::ProgrammingLanguage::Unknown;
+    return QSynedit::ProgrammingLanguage::Textfile;
 }
 
 QSynedit::PSyntaxer SyntaxerManager::copy(QSynedit::PSyntaxer syntaxer) const

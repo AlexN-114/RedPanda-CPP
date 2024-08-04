@@ -22,6 +22,7 @@ using std::string;
 using std::vector;
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -95,7 +96,7 @@ int ExecuteCommand(vector<string>& command,bool reInp, long int &peakMemory) {
         int command_size;
         if (reInp) {
             if (command.size()<2) {
-                printf("not enough arguments1!\n");
+                fprintf(stderr,"not enough arguments1!\n");
                 exit(-1);
             }
             freopen(unescapeSpaces(command[0]).c_str(),"r",stdin);
@@ -104,7 +105,7 @@ int ExecuteCommand(vector<string>& command,bool reInp, long int &peakMemory) {
             command_begin = 1;
         } else {
             if (command.size()<1) {
-                printf("not enough arguments2!\n");
+                fprintf(stderr,"not enough arguments2!\n");
                 exit(-1);
             }
             path_to_command = unescapeSpaces(command[0]);
@@ -125,10 +126,10 @@ int ExecuteCommand(vector<string>& command,bool reInp, long int &peakMemory) {
         argv[0]=(char *)file.c_str();
         int result=execv(path_to_command.c_str(),argv);
         if (result) {
-            printf("Failed to start command %s %s!\n",path_to_command.c_str(), file.c_str());
-            printf("errno %d: %s\n",errno,strerror(errno));
+            fprintf(stderr,"Failed to start command %s %s!\n",path_to_command.c_str(), file.c_str());
+            fprintf(stderr,"errno %d: %s\n",errno,strerror(errno));
             char* current_dir = getcwd(nullptr, 0);
-            printf("current dir: %s",current_dir);
+            fprintf(stderr,"current dir: %s",current_dir);
             free(current_dir);
             exit(-1);
         }
@@ -139,7 +140,7 @@ int ExecuteCommand(vector<string>& command,bool reInp, long int &peakMemory) {
         struct rusage usage;
         w = wait4(pid, &status, WUNTRACED | WCONTINUED, &usage);
         if (w==-1) {
-            perror("wait4 failed!");
+            fprintf(stderr,"wait4 failed!");
             exit(EXIT_FAILURE);
         }
         peakMemory = usage.ru_maxrss;
@@ -156,9 +157,9 @@ int main(int argc, char** argv) {
     char* sharedMemoryId;
     // First make sure we aren't going to read nonexistent arrays
     if(argc < 4) {
-        printf("\n--------------------------------");
-        printf("\nUsage: consolepauser <0|1> <shared_memory_id> <filename> <parameters>\n");
-        printf("\n 1 means the STDIN is redirected by Red Panda C++; 0 means not\n");
+        fprintf(stderr,"\n--------------------------------");
+        fprintf(stderr,"\nUsage: consolepauser <0|1> <shared_memory_id> <filename> <parameters>\n");
+        fprintf(stderr,"\n 1 means the STDIN is redirected by Red Panda C++; 0 means not\n");
         PauseExit(EXIT_SUCCESS,false);
     }
 
@@ -182,17 +183,13 @@ int main(int argc, char** argv) {
     int fd_shm = shm_open(sharedMemoryId,O_RDWR,S_IRWXU);
     if (fd_shm==-1) {
         //todo: handle error
-        printf("shm open failed %d:%s\n",errno,strerror(errno));
+        fprintf(stderr,"shm open failed %d:%s\n",errno,strerror(errno));
     } else {
-        if (ftruncate(fd_shm,BUF_SIZE)==-1){
-            printf("ftruncate failed %d:%s\n",errno,strerror(errno));
-            //todo: set size error
-        } else {
-            pBuf = (char*)mmap(NULL,BUF_SIZE,PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm,0);
-            if (pBuf == MAP_FAILED) {
-                printf("mmap failed %d:%s\n",errno,strerror(errno));
-                pBuf = nullptr;
-            }
+        // `ftruncate` has already done in RedPandaIDE
+        pBuf = (char*)mmap(NULL,BUF_SIZE,PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm,0);
+        if (pBuf == MAP_FAILED) {
+            fprintf(stderr,"mmap failed %d:%s\n",errno,strerror(errno));
+            pBuf = nullptr;
         }
     }
 

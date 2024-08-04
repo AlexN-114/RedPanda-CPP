@@ -14,6 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+#include <qsynedit/document.h>
 #include "formattergeneralwidget.h"
 #include "ui_formattergeneralwidget.h"
 #include "../settings.h"
@@ -29,6 +30,9 @@ FormatterGeneralWidget::FormatterGeneralWidget(const QString& name, const QStrin
     ui->editDemo->setReadOnly(true);
     connect(this, &SettingsWidget::settingsChanged,
                this, &FormatterGeneralWidget::updateDemo);
+
+    connect(ui->chkSqueezeEmptyLines, &QCheckBox::toggled,
+            ui->spinSqueezeEmptyLines, &QSpinBox::setEnabled);
 
     ui->cbMinConditionalIndent->addItem(tr("No minimal indent"),0);
     ui->cbMinConditionalIndent->addItem(tr("Indent at least one additional indent"),1);
@@ -96,8 +100,11 @@ void FormatterGeneralWidget::doLoad()
     ui->chkPadHeader->setChecked(format.padHeader());
     ui->chkUnpadParen->setChecked(format.unpadParen());
     ui->chkDeleteEmptyLines->setChecked(format.deleteEmptyLines());
-    ui->chkDeleteMultipleEmptyLines->setChecked(format.deleteMultipleEmptyLines());
     ui->chkFillEmptyLines->setChecked(format.fillEmptyLines());
+    ui->chkSqueezeEmptyLines->setChecked(format.squeezeLines());
+    ui->spinSqueezeEmptyLines->setEnabled(format.squeezeLines());
+    ui->spinSqueezeEmptyLines->setValue(format.squeezeLinesNumber());
+    ui->chkSqueezeWhitespace->setChecked(format.squeezeWhitespace());
     switch(format.alignPointerStyle()) {
     case FormatterOperatorAlign::foaNone:
         ui->rbAlignPointNone->setChecked(true);
@@ -319,6 +326,10 @@ void FormatterGeneralWidget::on_chkBreakMaxCodeLength_stateChanged(int)
 
 void FormatterGeneralWidget::updateDemo()
 {
+    if (!fileExists(pSettings->environment().AStylePath())) {
+        ui->editDemo->document()->setText(Editor::tr("Can't find astyle in \"%1\".").arg(pSettings->environment().AStylePath()));
+        return;
+    }
     QFile file(":/codes/formatdemo.cpp");
     if (!file.open(QFile::ReadOnly))
         return;
@@ -326,18 +337,7 @@ void FormatterGeneralWidget::updateDemo()
 
     Settings::CodeFormatter formatter(nullptr);
     updateCodeFormatter(formatter);
-
-#ifdef Q_OS_WIN
-    QByteArray newContent = runAndGetOutput("astyle.exe",
-                                            pSettings->dirs().appDir(),
-                                            formatter.getArguments(),
-                                            content);
-#else
-    QByteArray newContent = runAndGetOutput(pSettings->environment().AStylePath(),
-                                            extractFileDir(pSettings->environment().AStylePath()),
-                                            formatter.getArguments(),
-                                            content);
-#endif
+    QByteArray newContent = reformatContentUsingAstyle(content, formatter.getArguments());
     ui->editDemo->document()->setText(newContent);
 }
 
@@ -382,8 +382,11 @@ void FormatterGeneralWidget::updateCodeFormatter(Settings::CodeFormatter &format
     format.setPadHeader(ui->chkPadHeader->isChecked());
     format.setUnpadParen(ui->chkUnpadParen->isChecked());
     format.setDeleteEmptyLines(ui->chkDeleteEmptyLines->isChecked());
-    format.setDeleteMultipleEmptyLines(ui->chkDeleteMultipleEmptyLines->isChecked());
     format.setFillEmptyLines(ui->chkFillEmptyLines->isChecked());
+    format.setSqueezeLines(ui->chkSqueezeEmptyLines->isChecked());
+    format.setSqueezeLinesNumber(ui->spinSqueezeEmptyLines->value());
+    format.setSqueezeWhitespace(ui->chkSqueezeWhitespace->isChecked());
+
     if (ui->rbAlignPointNone->isChecked()) {
         format.setAlignPointerStyle(FormatterOperatorAlign::foaNone);
     } else if (ui->rbAlignPointType->isChecked()) {

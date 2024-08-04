@@ -21,13 +21,21 @@
 #include <QSet>
 #include <QVector>
 #include <memory>
+#include <functional>
 
 using GetFileStreamCallBack = std::function<bool (const QString&, QStringList&)>;
 
-enum ParserLanguage {
+enum class ParserLanguage {
     C,
-    CPlusPlus
+    CPlusPlus,
+#ifdef ENABLE_SDCC
+    SDCC,
+#endif
 };
+
+inline uint qHash(const ParserLanguage& value, uint seed) {
+    return qHash((int)value, seed);
+}
 
 struct CodeSnippet {
     QString caption; //Name
@@ -46,8 +54,8 @@ struct Define {
     QString value;
     QString filename;
     bool hardCoded;// if true, don't free memory (points to hard defines)
-    QStringList argList; // args list to format values
     QList<bool> argUsed;
+    int varArgIndex;
     QString formatValue; // format template to format values
 };
 
@@ -77,37 +85,42 @@ enum class KeywordType {
     Using, //using
     DeclType, // decltype
     Operator, //operator
+    Concept, //concept
+    Requires, //requires
     None, // It's a keyword but don't process here
+    Extern,
     NotKeyword
 };
 
-//It will be used as hash key. DONT make it enum class!!!!!
-enum StatementKind  {
-  skUnknown,
-  skNamespace,
-  skNamespaceAlias,
-  skClass,
-  skPreprocessor,
-  skEnumType,
-  skEnumClassType,
-  skTypedef,
-  skConstructor,
-  skDestructor,
-  skFunction,
-  skVariable,
-  skGlobalVariable,
-  skLocalVariable,
-  skEnum,
-  skOperator,
-  skParameter,
-  skBlock,
-  skUserCodeSnippet,  // user code template
-  skKeyword, // keywords
-  skKeywordType, //keywords for type (for color management)
-  skAlias
+enum class StatementKind  {
+    Unknown,
+    Namespace,
+    NamespaceAlias,
+    Class,
+    Preprocessor,
+    EnumType,
+    EnumClassType,
+    Typedef,
+    Constructor,
+    Destructor,
+    Function,
+    Variable,
+    GlobalVariable,
+    LocalVariable,
+    Enum,
+    Operator,
+    Parameter,
+    Block,
+    Lambda,
+    UserCodeSnippet,  // user code template
+    Keyword, // keywords
+    KeywordType, //keywords for type (for color management)
+    Alias, // using alias
 };
 
-using StatementKindSet = QSet<StatementKind>;
+inline uint qHash(const StatementKind& value, uint seed) {
+    return qHash((int)value, seed);
+}
 
 enum class StatementScope {
     Global,
@@ -123,10 +136,10 @@ enum class StatementAccessibility {
 };
 
 enum class MemberOperatorType {
-  Arrow,
-  Dot,
-  DColon,
-  Other
+    Arrow,
+    Dot,
+    DColon,
+    Other
 };
 
 enum class EvalStatementKind {
@@ -138,29 +151,28 @@ enum class EvalStatementKind {
 };
 
 struct StatementMatchPosition{
-    int start;
-    int end;
+    uint16_t start;
+    uint16_t end;
 };
 
-enum StatementProperty {
-    spNone =                0x0,
-    spStatic =              0x0001,
-    spHasDefinition =       0x0002,
-    spInProject =           0x0004,
-    spInSystemHeader =      0x0008,
-    spInherited =           0x0010,
-    spVirtual =             0x0020,
-    spOverride =            0x0040,
-    spConstexpr =           0x0080,
-    spFunctionPointer =     0x0100,
-    spOperatorOverloading = 0x0200
+enum class StatementProperty {
+    None =                0x0,
+    Static =              0x0001,
+    HasDefinition =       0x0002,
+    InProject =           0x0004,
+    InSystemHeader =      0x0008,
+    Inherited =           0x0010,
+    Virtual =             0x0020,
+    Override =            0x0040,
+    Constexpr =           0x0080,
+    FunctionPointer =     0x0100,
+    OperatorOverloading = 0x0200,
+    DummyStatement     =  0x0400
 };
 
 Q_DECLARE_FLAGS(StatementProperties, StatementProperty)
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(StatementProperties)
-
-
 
 using PStatementMathPosition = std::shared_ptr<StatementMatchPosition>;
 
@@ -170,13 +182,12 @@ using StatementList = QList<PStatement>;
 using PStatementList = std::shared_ptr<StatementList>;
 using StatementMap = QMultiMap<QString, PStatement>;
 struct Statement {
-//    Statement();
-//    ~Statement();
     std::weak_ptr<Statement> parentScope; // parent class/struct/namespace scope, use weak pointer to prevent circular reference
     QString type; // type "int"
     QString command; // identifier/name of statement "foo"
     QString args; // args "(int a,float b)"
     QString value; // Used for macro defines/typedef, "100" in "#defin COUNT 100"
+    QString templateSpecializationParams;
     StatementKind kind; // kind of statement class/variable/function/etc
     StatementScope scope; // global/local/classlocal
     StatementAccessibility accessibility; // protected/private/public
@@ -189,46 +200,47 @@ struct Statement {
     QString fullName; // fullname(including class and namespace), ClassA::foo
     QSet<QString> usingList; // using namespaces
     QString noNameArgs;// Args without name
+    QSet<QString> lambdaCaptures;
     StatementProperties properties;
 
     // fields for code completion
     int usageCount; //Usage Count
-    int matchPosTotal; // total of matched positions
-    int matchPosSpan; // distance between the first match pos and the last match pos;
-    int firstMatchLength; // length of first match;
-    int caseMatched; // if match with case
+    uint16_t matchPosTotal; // total of matched positions
+    uint16_t matchPosSpan; // distance between the first match pos and the last match pos;
+    uint16_t firstMatchLength; // length of first match;
+    uint16_t caseMatched; // if match with case
     QList<PStatementMathPosition> matchPositions;
 
     // definiton line/filename is valid
     bool hasDefinition() {
-        return properties.testFlag(StatementProperty::spHasDefinition);
-    };
+        return properties.testFlag(StatementProperty::HasDefinition);
+    }
     void setHasDefinition(bool on) {
-        properties.setFlag(StatementProperty::spHasDefinition,on);
+        properties.setFlag(StatementProperty::HasDefinition,on);
     }
     // statement in project
     bool inProject() {
-        return properties.testFlag(StatementProperty::spInProject);
+        return properties.testFlag(StatementProperty::InProject);
     }
     void setInProject(bool on) {
-        properties.setFlag(StatementProperty::spInProject, on);
+        properties.setFlag(StatementProperty::InProject, on);
     }
     // statement in system header (#include <>)
     bool inSystemHeader() {
-        return properties.testFlag(StatementProperty::spInSystemHeader);
-    };
+        return properties.testFlag(StatementProperty::InSystemHeader);
+    }
     void setInSystemHeader(bool on) {
-        properties.setFlag(StatementProperty::spInSystemHeader, on);
+        properties.setFlag(StatementProperty::InSystemHeader, on);
     }
     bool isStatic() {
-        return properties.testFlag(StatementProperty::spStatic);
+        return properties.testFlag(StatementProperty::Static);
     } // static function / variable
     void setIsStatic(bool on) {
-        properties.setFlag(StatementProperty::spStatic, on);
+        properties.setFlag(StatementProperty::Static, on);
     }
     bool isInherited() {
-        return properties.testFlag(StatementProperty::spInherited);
-    }; // inherted member;
+        return properties.testFlag(StatementProperty::Inherited);
+    } // inherted member;
 
 };
 
@@ -277,31 +289,83 @@ struct CppScope {
 
 using PCppScope = std::shared_ptr<CppScope>;
 class CppScopes {
-
 public:
-    PStatement findScopeAtLine(int line);
+    PStatement findScopeAtLine(int line) const;
     void addScope(int line, PStatement scopeStatement);
-    PStatement lastScope();
-    void removeLastScope();
-    void clear();
+    PStatement lastScope() const {
+        if (mScopes.isEmpty())
+            return PStatement();
+        return mScopes.back()->statement;
+    }
+    void removeLastScope() {
+        if (!mScopes.isEmpty())
+            mScopes.pop_back();
+    }
+    void clear() { mScopes.clear(); }
 private:
     QVector<PCppScope> mScopes;
 };
 
-struct FileIncludes {
-    QString baseFile;
-    QMap<QString, bool> includeFiles; // true means the file is directly included, false means included indirectly
-    QStringList directIncludes; //
-    QSet<QString> usings; // namespaces it usings
-    StatementMap statements; // but we don't save temporary statements (full name as key)
-    StatementMap declaredStatements; // statements declared in this file (full name as key)
-    CppScopes scopes; // int is start line of the statement scope
+struct ClassInheritanceInfo {
+    std::weak_ptr<Statement> derivedClass;
+    QString file;
+    QString parentClassName;
+    bool isGlobal;
+    bool isStruct;
+    StatementAccessibility visibility;
+//    QString parentClassFilename;
+    bool handled;
 };
-using PFileIncludes = std::shared_ptr<FileIncludes>;
+
+using PClassInheritanceInfo = std::shared_ptr<ClassInheritanceInfo>;
+
+class ParsedFileInfo {
+public:
+    ParsedFileInfo(const QString& fileName): mFileName {fileName} { }
+    ParsedFileInfo(const ParsedFileInfo&)=delete;
+    ParsedFileInfo& operator=(const ParsedFileInfo&)=delete;
+    void insertBranch(int level, bool branchTrue) { mBranches.insert(level, branchTrue); }
+    bool isLineVisible(int line) const;
+    void addInclude(const QString &fileName) { mIncludes.insert(fileName); }
+    void addDirectInclude(const QString &fileName) { mDirectIncludes.append(fileName); }
+    bool including(const QString &fileName) const { return mIncludes.contains(fileName); }
+    PStatement findScopeAtLine(int line) const { return mScopes.findScopeAtLine(line); }
+    void addStatement(const PStatement &statement) { mStatements.insert(statement->fullName,statement); }
+    void clearStatements() { mStatements.clear(); }
+    void addScope(int line, const PStatement &scope) { mScopes.addScope(line,scope); }
+    void removeLastScope() { mScopes.removeLastScope(); }
+    PStatement lastScope() const { return mScopes.lastScope(); }
+    void addUsing(const QString &usingSymbol) { mUsings.insert(usingSymbol); }
+    void addHandledInheritances(std::weak_ptr<ClassInheritanceInfo> classInheritanceInfo) { mHandledInheritances.append(classInheritanceInfo); }
+    void clearHandledInheritances() { mHandledInheritances.clear(); }
+
+    QString fileName() const { return mFileName; }
+    const StatementMap& statements() const { return mStatements; }
+    const QSet<QString>& usings() const { return mUsings; }
+    const QStringList& directIncludes() const { return mDirectIncludes; }
+    const QSet<QString>& includes() const { return mIncludes; }
+    const QList<std::weak_ptr<ClassInheritanceInfo> >& handledInheritances() const { return mHandledInheritances; }
+
+private:
+    QString mFileName;
+    QSet<QString> mIncludes;
+    QStringList mDirectIncludes; //We need order here.
+    QSet<QString> mUsings; // namespaces it usings
+    StatementMap mStatements; // but we don't save temporary statements (full name as key)
+    CppScopes mScopes; // int is start line of the statement scope
+    QMap<int,bool> mBranches;
+    QList<std::weak_ptr<ClassInheritanceInfo>> mHandledInheritances;
+};
+
+using PParsedFileInfo = std::shared_ptr<ParsedFileInfo>;
 
 extern QStringList CppDirectives;
 extern QStringList JavadocTags;
 extern QMap<QString,KeywordType> CppKeywords;
+#ifdef ENABLE_SDCC
+extern QMap<QString,KeywordType> SDCCKeywords;
+extern QSet<QString> SDCCTypeKeywords;
+#endif
 extern QSet<QString> CppControlKeyWords;
 extern QSet<QString> CKeywords;
 extern QSet<QString> CppTypeKeywords;

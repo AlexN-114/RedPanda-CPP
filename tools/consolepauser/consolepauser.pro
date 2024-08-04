@@ -3,10 +3,6 @@ QT -= gui
 CONFIG += c++11 console
 CONFIG -= app_bundle
 
-msvc {
-    CONFIG += windows
-}
-
 isEmpty(APP_NAME) {
     APP_NAME = RedPandaCPP
 }
@@ -32,7 +28,8 @@ LIBS+= \
 }
 
 win32: {
-DEFINES += _WIN32_WINNT=0x0601
+    DEFINES += _WIN32_WINNT=0x0501
+    LIBS += -lpsapi  # GetProcessMemoryInfo
 }
 
 CONFIG += lrelease

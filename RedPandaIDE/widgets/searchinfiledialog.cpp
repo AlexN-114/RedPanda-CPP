@@ -17,21 +17,21 @@
 #include "searchinfiledialog.h"
 #include "ui_searchinfiledialog.h"
 #include <QTabBar>
-#include "../editor.h"
-#include "../mainwindow.h"
-#include "../editorlist.h"
-#include <qsynedit/searcher/basicsearcher.h>
-#include <qsynedit/searcher/regexsearcher.h>
-#include "../project.h"
-#include "../settings.h"
-#include "../systemconsts.h"
 #include <QMessageBox>
 #include <QDebug>
 #include <QProgressDialog>
 #include <QCompleter>
 #include <QStack>
 #include <QFileDialog>
-
+#include <qsynedit/document.h>
+#include <qsynedit/searcher/basicsearcher.h>
+#include <qsynedit/searcher/regexsearcher.h>
+#include "../editor.h"
+#include "../mainwindow.h"
+#include "../editorlist.h"
+#include "../project.h"
+#include "../settings.h"
+#include "../systemconsts.h"
 
 SearchInFileDialog::SearchInFileDialog(QWidget *parent) :
     QDialog(parent),
@@ -54,15 +54,16 @@ SearchInFileDialog::~SearchInFileDialog()
 
 void SearchInFileDialog::findInFiles(const QString &text)
 {
-    ui->cbFind->setCurrentText(text);
-    ui->cbFind->setFocus();
+    if (!text.isEmpty())
+        ui->cbFind->setCurrentText(text);
+    ui->btnExecute->setFocus();
     show();
 }
 
 void SearchInFileDialog::findInFiles(const QString &keyword, SearchFileScope scope, QSynedit::SearchOptions options, const QString& folder, const QString& filters, bool searchSubfolders)
 {
     ui->cbFind->setCurrentText(keyword);
-    ui->cbFind->setFocus();
+    ui->btnExecute->setFocus();
 
     switch(scope) {
     case SearchFileScope::currentFile:
@@ -370,22 +371,22 @@ std::shared_ptr<SearchResultTreeItem> SearchInFileDialog::batchFindInEditor(QSyn
     QSynedit::BufferCoord caretBackup = e->caretXY();
     QSynedit::BufferCoord blockBeginBackup = e->blockBegin();
     QSynedit::BufferCoord blockEndBackup = e->blockEnd();
-    int toplineBackup = e->topLine();
-    int leftCharBackup = e->leftChar();
+    int topPosBackup = e->topPos();
+    int leftPosBackup = e->leftPos();
 
     PSearchResultTreeItem parentItem = std::make_shared<SearchResultTreeItem>();
     parentItem->filename = filename;
     parentItem->parent = nullptr;
     execute(e,keyword,"",
                     [e,&parentItem, filename](const QString&,
-                    const QString&, int Line, int ch, int wordLen){
+                    const QString&, int line, int ch, int wordLen){
         PSearchResultTreeItem item = std::make_shared<SearchResultTreeItem>();
         item->filename = filename;
-        item->line = Line;
+        item->line = line;
         item->start = ch;
         item->len = wordLen;
         item->parent = parentItem.get();
-        item->text = e->document()->getLine(Line-1);
+        item->text = e->lineText(line);
         item->text.replace('\t',' ');
         parentItem->results.append(item);
         return QSynedit::SearchAction::Skip;
@@ -393,8 +394,8 @@ std::shared_ptr<SearchResultTreeItem> SearchInFileDialog::batchFindInEditor(QSyn
 
     // restore
     e->setCaretXY(caretBackup);
-    e->setTopLine(toplineBackup);
-    e->setLeftChar(leftCharBackup);
+    e->setTopPos(topPosBackup);
+    e->setLeftPos(leftPosBackup);
     e->setCaretAndSelection(
                 caretBackup,
                 blockBeginBackup,

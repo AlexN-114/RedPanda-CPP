@@ -118,10 +118,6 @@
      <property name="text">
       <string>...</string>
      </property>
-     <property name="icon">
-      <iconset resource="../icons.qrc">
-       <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
-     </property>
     </widget>
    </item>
    <item row="2" column="2" colspan="2">
@@ -139,8 +135,16 @@
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="../icons.qrc"/>
- </resources>
+ <tabstops>
+  <tabstop>txtClassName</tabstop>
+  <tabstop>cbBaseClass</tabstop>
+  <tabstop>txtHeaderName</tabstop>
+  <tabstop>txtSourceName</tabstop>
+  <tabstop>txtPath</tabstop>
+  <tabstop>btnBrowsePath</tabstop>
+  <tabstop>btnCreate</tabstop>
+  <tabstop>btnCancel</tabstop>
+ </tabstops>
+ <resources/>
  <connections/>
 </ui>

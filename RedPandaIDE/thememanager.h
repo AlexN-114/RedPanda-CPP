@@ -16,17 +16,19 @@
  */
 #ifndef THEMEMANAGER_H
 #define THEMEMANAGER_H
-#include <QObject>
 #include <QPalette>
 #include <QHash>
 #include <QColor>
 #include <memory>
+#include <QObject>
+#include <set>
 
-class AppTheme:public QObject {
+class AppTheme;
+using PAppTheme = std::shared_ptr<AppTheme>;
+
+class AppTheme : public QObject{
     Q_OBJECT
 public:
-    explicit AppTheme(QObject* parent = nullptr);
-
     enum ColorRole {
         /* Color for QPalette */
 
@@ -75,13 +77,27 @@ public:
 
     Q_ENUM(ColorRole)
 
+    enum class ThemeType {
+        HardCoded,
+        JSON,
+#ifdef ENABLE_LUA_ADDON
+        Lua,
+#endif
+    };
+
+    enum class ThemeCategory {
+        FailSafe,
+        BuiltIn,
+        Custom,
+        Shared,
+    };
+
+    AppTheme(const QString& filename, ThemeType type, ThemeCategory category, QObject* parent=nullptr);
+
     QColor color(ColorRole role) const;
     QPalette palette() const;
 
-    void load(const QString& filename);
-
-    bool useQtFusionStyle() const;
-    bool isDark() const;
+    const QString &style() const;
 
     const QString &defaultColorScheme() const;
     void setDefaultColorScheme(const QString &newDefaultColorScheme);
@@ -93,19 +109,36 @@ public:
     const QString &defaultIconSet() const;
     void setDefaultIconSet(const QString &newDefaultIconSet);
 
+    static bool isSystemInDarkMode();
+    static QString initialStyle();
+
+    const QString& filename() const;
+
+    const QString categoryIcon() const;
+
+    bool copyTo(const QString& targetFolder);
+
+public:
+    static PAppTheme fallbackTheme();
+
+    ThemeCategory category() const;
+
+private:
+    AppTheme();
+
 private:
     static QPalette initialPalette();
 private:
     QHash<int,QColor> mColors;
     QString mName;
     QString mDisplayName;
-    bool mUseQtFusionStyle;
-    bool mIsDark;
+    QString mStyle;
     QString mDefaultColorScheme;
     QString mDefaultIconSet;
+    QString mFilename;
+    ThemeType mType;
+    ThemeCategory mCategory;
 };
-
-using PAppTheme = std::shared_ptr<AppTheme>;
 
 class ThemeManager : public QObject
 {
@@ -113,13 +146,24 @@ class ThemeManager : public QObject
 public:
     explicit ThemeManager(QObject *parent = nullptr);
     PAppTheme theme(const QString& themeName);
-    bool useCustomTheme() const;
-    void setUseCustomTheme(bool newUseCustomTheme);
-    void prepareCustomeTheme();
     QList<PAppTheme> getThemes();
 
 private:
-    bool mUseCustomTheme;
+    struct ThemeCompare {
+        bool operator()(const PAppTheme &lhs, const PAppTheme &rhs) const;
+    };
+
+private:
+    bool tryLoadThemeFromDir(const QString &dir, AppTheme::ThemeCategory category, const QString &themeName, PAppTheme &theme);
+    void loadThemesFromDir(const QString &dir, AppTheme::ThemeCategory category, std::set<PAppTheme, ThemeCompare> &themes);
+
+    // lua overrides json
+    inline static const std::pair<QString, AppTheme::ThemeType> searchTypes[] = {
+#ifdef ENABLE_LUA_ADDON
+        { "lua", AppTheme::ThemeType::Lua },
+#endif
+        { "json", AppTheme::ThemeType::JSON },
+    };
 };
 
 #endif // THEMEMANAGER_H

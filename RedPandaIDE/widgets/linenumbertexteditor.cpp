@@ -197,10 +197,10 @@ void LineNumberTextEditor::lineNumberAreaPaintEvent(QPaintEvent *event)
                 painter.setPen(mLineNumberAreaCurrentLine);
             else
                 painter.setPen(mLineNumberAreaForeground);
+            // int y=top+std::max(0,bottom-top-fontMetrics().lineSpacing());
             painter.drawText(5, top, lineNumberArea->width()-10, fontMetrics().height(),
                              Qt::AlignRight, number);
         }
-
         block = block.next();
         top = bottom;
         bottom = top + qRound(blockBoundingRect(block).height());

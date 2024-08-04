@@ -16,6 +16,7 @@
  */
 #include "glsl.h"
 #include "../constants.h"
+#include <qt_utils/utils.h>
 
 #include <QFont>
 
@@ -1236,24 +1237,14 @@ void GLSLSyntaxer::pushIndents(IndentType indentType, int line)
     mRange.indents.push_back(IndentInfo{indentType,line});
 }
 
-bool GLSLSyntaxer::getTokenFinished() const
-{
-    if (mTokenId == TokenId::Comment
-            || mTokenId == TokenId::String
-            || mTokenId == TokenId::RawString) {
-        return mRange.state == RangeState::rsUnknown;
-    }
-    return true;
-}
-
-bool GLSLSyntaxer::isLastLineCommentNotFinished(int state) const
+bool GLSLSyntaxer::isCommentNotFinished(int state) const
 {
     return (state == RangeState::rsAnsiC ||
             state == RangeState::rsDirectiveComment||
             state == RangeState::rsCppComment);
 }
 
-bool GLSLSyntaxer::isLastLineStringNotFinished(int state) const
+bool GLSLSyntaxer::isStringNotFinished(int state) const
 {
     return state == RangeState::rsMultiLineString;
 }
@@ -1370,7 +1361,7 @@ void GLSLSyntaxer::next()
 void GLSLSyntaxer::setLine(const QString &newLine, int lineNumber)
 {
     mLineString = newLine;
-    mLine = mLineString.data();
+    mLine = getNullTerminatedStringData(mLineString);
     mLineNumber = lineNumber;
     mRun = 0;
     mRange.blockStarted = 0;
@@ -1424,11 +1415,6 @@ SyntaxState GLSLSyntaxer::getState() const
     return mRange;
 }
 
-bool GLSLSyntaxer::isIdentChar(const QChar &ch) const
-{
-    return ch=='_' || (ch>='a' && ch<='z') || (ch>='A' && ch<='Z') || (ch>='0' && ch<='9');
-}
-
 QSet<QString> GLSLSyntaxer::keywords()
 {
     return Keywords;
@@ -1452,5 +1438,15 @@ QString GLSLSyntaxer::blockCommentBeginSymbol()
 QString GLSLSyntaxer::blockCommentEndSymbol()
 {
     return "*/";
+}
+
+bool GLSLSyntaxer::supportFolding()
+{
+    return true;
+}
+
+bool GLSLSyntaxer::needsLineState()
+{
+    return true;
 }
 }

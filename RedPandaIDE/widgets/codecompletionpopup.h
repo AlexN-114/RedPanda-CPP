@@ -19,6 +19,7 @@
 
 #include <QListView>
 #include <QWidget>
+#include <QStyledItemDelegate>
 #include "parser/cppparser.h"
 #include "codecompletionlistview.h"
 
@@ -30,7 +31,7 @@ public:
     int rowCount(const QModelIndex &parent) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     PStatement statement(const QModelIndex &index) const;
-    QPixmap statementIcon(const QModelIndex &index) const;
+    QPixmap statementIcon(const QModelIndex &index, int size) const;
     void notifyUpdated();
 
 private:
@@ -43,6 +44,7 @@ enum class CodeCompletionType {
     FunctionWithoutDefinition,
     Namespaces,
     Types,
+    Macros,
     KeywordsOnly
 };
 
@@ -55,8 +57,7 @@ public:
     // QAbstractItemDelegate interface
 public:
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
-    CodeCompletionListModel *model() const;
-    void setModel(CodeCompletionListModel *newModel);
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
 
     const QColor &normalColor() const;
     void setNormalColor(const QColor &newNormalColor);
@@ -67,11 +68,19 @@ public:
     const QFont &font() const;
     void setFont(const QFont &newFont);
 
+    float lineHeightFactor() const;
+    void setLineHeightFactor(float newLineHeightFactor);
+
+    QColor currentSelectionColor() const;
+    void setCurrentSelectionColor(const QColor &newCurrentSelectionColor);
+
 private:
     CodeCompletionListModel *mModel;
     QColor mNormalColor;
     QColor mMatchedColor;
+    QColor mCurrentSelectionColor;
     QFont mFont;
+    float mLineHeightFactor;
 };
 
 class CodeCompletionPopup : public QWidget
@@ -120,6 +129,7 @@ public:
     void setHideSymbolsStartWithUnderline(bool newHideSymbolsStartWithUnderline);
     bool hideSymbolsStartWithTwoUnderline() const;
     void setHideSymbolsStartWithTwoUnderline(bool newHideSymbolsStartWithTwoUnderline);
+    void setLineHeightFactor(float factor);
 
     const PStatement &currentScope() const;
     void setCurrentScope(const PStatement &newCurrentStatement);
@@ -136,6 +146,7 @@ private:
     void addStatement(const PStatement& statement, const QString& fileName, int line);
     void filterList(const QString& member);
     void getKeywordCompletionFor(const QSet<QString>& customKeywords);
+    void getMacroCompletionList(const QString &fileName, int line);
     void getCompletionFor(
             QStringList ownerExpression,
             const QString& memberOperator,
@@ -173,11 +184,7 @@ private:
     QSet<QString> mAddedStatements;
     QString mMemberPhrase;
     QString mMemberOperator;
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-    QRecursiveMutex mMutex;
-#else
-    QMutex mMutex;
-#endif
+    mutable QRecursiveMutex mMutex;
     std::shared_ptr<QHash<StatementKind, std::shared_ptr<ColorSchemeItem> > > mColors;
     CodeCompletionListItemDelegate* mDelegate;
 
@@ -194,7 +201,6 @@ private:
 
     // QWidget interface
 protected:
-    void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
 
     // QObject interface

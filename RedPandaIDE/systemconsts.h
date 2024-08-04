@@ -22,7 +22,6 @@
 #define APP_SETTSINGS_FILENAME "redpandacpp.ini"
 #ifdef Q_OS_WIN
 #define CONSOLE_PAUSER  "consolepauser.exe"
-#define ASSEMBLER   "nasm.exe"
 #define GCC_PROGRAM     "gcc.exe"
 #define GPP_PROGRAM     "g++.exe"
 #define GDB_PROGRAM     "gdb.exe"
@@ -31,15 +30,19 @@
 #define MAKE_PROGRAM    "mingw32-make.exe"
 #define WINDRES_PROGRAM "windres.exe"
 #define CLEAN_PROGRAM   "del /q /f"
+#define CD_PROGRAM   "cd /d"
 #define CPP_PROGRAM     "cpp.exe"
 #define GIT_PROGRAM     "git.exe"
 #define CLANG_PROGRAM   "clang.exe"
 #define CLANG_CPP_PROGRAM   "clang++.exe"
 #define LLDB_MI_PROGRAM   "lldb-mi.exe"
 #define LLDB_SERVER_PROGRAM   "lldb-server.exe"
-#elif defined(Q_OS_LINUX)
+#define SDCC_PROGRAM   "sdcc.exe"
+#define PACKIHX_PROGRAM   "packihx.exe"
+#define MAKEBIN_PROGRAM   "makebin.exe"
+#define ASTYLE_PROGRAM     "astyle.exe"
+#else // Unix
 #define CONSOLE_PAUSER  "consolepauser"
-#define ASSEMBLER   "nasm"
 #define GCC_PROGRAM     "gcc"
 #define GPP_PROGRAM     "g++"
 #define GDB_PROGRAM     "gdb"
@@ -49,31 +52,17 @@
 #define WINDRES_PROGRAM ""
 #define GPROF_PROGRAM   "gprof"
 #define CLEAN_PROGRAM   "rm -rf"
+#define CD_PROGRAM   "cd"
 #define CPP_PROGRAM     "cpp"
 #define GIT_PROGRAM     "git"
 #define CLANG_PROGRAM   "clang"
 #define CLANG_CPP_PROGRAM   "clang++"
 #define LLDB_MI_PROGRAM   "lldb-mi"
 #define LLDB_SERVER_PROGRAM   "lldb-server"
-#elif defined(Q_OS_MACOS)
-#define CONSOLE_PAUSER  "consolepauser"
-#define ASSEMBLER   "nasm"
-#define GCC_PROGRAM     "gcc"
-#define GPP_PROGRAM     "g++"
-#define GDB_PROGRAM     "gdb"
-#define GDB_SERVER_PROGRAM     "gdbserver"
-#define GDB32_PROGRAM   "gdb32"
-#define MAKE_PROGRAM    "make"
-#define WINDRES_PROGRAM ""
-#define CLEAN_PROGRAM   "rm -rf"
-#define CPP_PROGRAM     "cpp"
-#define GIT_PROGRAM     "git"
-#define CLANG_PROGRAM   "clang"
-#define CLANG_CPP_PROGRAM   "clang++"
-#define LLDB_MI_PROGRAM   "lldb-mi"
-#define LLDB_SERVER_PROGRAM   "lldb-server"
-#else
-#error "Only support windows, Linux and MacOS now!"
+#define SDCC_PROGRAM   "sdcc"
+#define PACKIHX_PROGRAM   "packihx"
+#define MAKEBIN_PROGRAM   "makebin"
+#define ASTYLE_PROGRAM     "astyle"
 #endif
 
 #define DEV_PROJECT_EXT "dev"
@@ -119,7 +108,7 @@
 #   define MAKEFILE_NAME    "makefile.win"
 #   define XMAKEFILE_NAME    "xmake.lua"
 #   define ALL_FILE_WILDCARD "*.*"
-#elif defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
+#else // Unix
 #   define PATH_SENSITIVITY Qt::CaseSensitive
 #   define PATH_SEPARATOR   ":"
 #   define LINE_BREAKER     "\n"
@@ -133,18 +122,22 @@
 #   define MAKEFILE_NAME    "makefile"
 #   define XMAKEFILE_NAME    "xmake.lua"
 #   define ALL_FILE_WILDCARD "*"
-#else
-#error "Only support windows and linux now!"
 #endif
+
+#define SDCC_IHX_SUFFIX "ihx"
+#define SDCC_BIN_SUFFIX "bin"
+#define SDCC_HEX_SUFFIX "hex"
+#define SDCC_REL_SUFFIX "rel"
 
 class SystemConsts
 {
 public:
     SystemConsts();
     const QStringList& defaultFileFilters() const noexcept;
-    const QString& defaultCFileFilter() const noexcept;
-    const QString& defaultCPPFileFilter() const noexcept;
-    const QString& defaultAllFileFilter() const noexcept;
+    QString defaultCFileFilter() const noexcept;
+    QString defaultCPPFileFilter() const noexcept;
+    QString defaultAllFileFilter() const noexcept;
+    QString executableFileFilter() const noexcept;
     QString fileFilterFor(const QString& suffix);
     void addDefaultFileFilter(const QString& name, const QString& fileExtensions);
     const QStringList &iconFileFilters() const;

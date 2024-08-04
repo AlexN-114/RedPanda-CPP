@@ -14,12 +14,12 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include <QDesktopWidget>
+#include <qsynedit/document.h>
 #include "cpudialog.h"
 #include "ui_cpudialog.h"
 #include "../syntaxermanager.h"
 #include "../mainwindow.h"
-#include "../debugger.h"
+#include "../debugger/debugger.h"
 #include "../settings.h"
 #include "../colorscheme.h"
 #include "../iconsmanager.h"
@@ -33,7 +33,7 @@ CPUDialog::CPUDialog(QWidget *parent) :
     setWindowFlags(windowFlags() | Qt::WindowMinimizeButtonHint | Qt::WindowMaximizeButtonHint);
     setWindowFlag(Qt::WindowContextHelpButtonHint,false);
     ui->setupUi(this);
-    ui->txtCode->setSyntaxer(syntaxerManager.getSyntaxer(QSynedit::ProgrammingLanguage::Assembly));
+    updateSyntaxer();
     ui->txtCode->setReadOnly(true);
     ui->txtCode->gutter().setShowLineNumbers(false);
     ui->txtCode->setCaretUseTextColor(true);
@@ -44,11 +44,10 @@ CPUDialog::CPUDialog(QWidget *parent) :
     ui->txtCode->setUseCodeFolding(false);
     ui->txtCode->setRightEdge(0);
     QSynedit::EditorOptions options=ui->txtCode->getOptions();
-    options.setFlag(QSynedit::EditorOption::eoScrollPastEof,false);
-    options.setFlag(QSynedit::EditorOption::eoScrollPastEol,false);
+    options.setFlag(QSynedit::EditorOption::ScrollPastEof,false);
+    options.setFlag(QSynedit::EditorOption::ScrollPastEol,false);
+    options.setFlag(QSynedit::EditorOption::ShowRainbowColor, false);
     ui->txtCode->setOptions(options);
-    syntaxerManager.applyColorScheme(ui->txtCode->syntaxer(),
-                                        pSettings->editor().colorScheme());
     PColorSchemeItem item = pColorManager->getItem(pSettings->editor().colorScheme(),COLOR_SCHEME_ACTIVE_LINE);
     if (item) {
         ui->txtCode->setActiveLineColor(item->background());
@@ -85,14 +84,11 @@ CPUDialog::~CPUDialog()
 void CPUDialog::updateInfo()
 {
     if (pMainWindow->debugger()->executing()) {
-        pMainWindow->debugger()->sendCommand("-stack-info-frame", "");
+        pMainWindow->debugger()->refreshFrame();
         // Load the registers..
         sendSyntaxCommand();
-        pMainWindow->debugger()->sendCommand("-data-list-register-values", "N");
-        if (ui->chkBlendMode->isChecked())
-            pMainWindow->debugger()->sendCommand("disas", "/s");
-        else
-            pMainWindow->debugger()->sendCommand("disas", "");
+        pMainWindow->debugger()->refreshRegisters();
+        pMainWindow->debugger()->disassembleCurrentFrame(ui->chkBlendMode->isChecked());
     }
 }
 
@@ -130,11 +126,13 @@ void CPUDialog::setDisassembly(const QString& file, const QString& funcName,cons
     int activeLine = -1;
     for (int i=0;i<lines.size();i++) {
         QString line = lines[i];
-        if (line.startsWith("=>")) {
+        if (line.startsWith("=>") || line.startsWith("->")) {
             activeLine = i;
         }
     }
     ui->txtCode->document()->setContents(lines);
+    ui->txtCode->reparseDocument();
+    ui->txtCode->invalidate();
     if (activeLine!=-1)
         ui->txtCode->setCaretXYCentered(QSynedit::BufferCoord{1,activeLine+1});
     mSetting=false;
@@ -142,24 +140,39 @@ void CPUDialog::setDisassembly(const QString& file, const QString& funcName,cons
 
 void CPUDialog::resetEditorFont(float dpi)
 {
-    QFont f=QFont(pSettings->editor().fontName());
+    QSynedit::EditorOptions options=ui->txtCode->getOptions();
+    options.setFlag(QSynedit::EditorOption::LigatureSupport, pSettings->editor().enableLigaturesSupport());
+    options.setFlag(QSynedit::EditorOption::ForceMonospace,
+                    pSettings->editor().forceFixedFontWidth());
+    ui->txtCode->setOptions(options);
+    QFont f=QFont();
+    f.setFamily(pSettings->editor().fontName());
+    f.setFamilies(pSettings->editor().fontFamiliesWithControlFont());
     f.setPixelSize(pointToPixel(pSettings->editor().fontSize(),dpi));
     f.setStyleStrategy(QFont::PreferAntialias);
     ui->txtCode->setFont(f);
-    QFont f2=QFont(pSettings->editor().nonAsciiFontName());
-    f2.setPixelSize(pointToPixel(pSettings->editor().fontSize(),dpi));
-    f2.setStyleStrategy(QFont::PreferAntialias);
-    ui->txtCode->setFontForNonAscii(f2);
 }
 
 void CPUDialog::sendSyntaxCommand()
 {
-    // Set disassembly flavor
-    if (ui->rdIntel->isChecked()) {
-        pMainWindow->debugger()->sendCommand("-gdb-set", "disassembly-flavor intel");
+    pMainWindow->debugger()->setDisassemblyLanguage(ui->rdIntel->isChecked());
+}
+
+void CPUDialog::updateSyntaxer()
+{
+    if (pSettings->debugger().blendMode() && pMainWindow->debugger()->supportDisassemlyBlendMode()) {
+        if (pSettings->debugger().useIntelStyle())
+            ui->txtCode->setSyntaxer(syntaxerManager.getSyntaxer(QSynedit::ProgrammingLanguage::MixedAssembly));
+        else
+            ui->txtCode->setSyntaxer(syntaxerManager.getSyntaxer(QSynedit::ProgrammingLanguage::MixedATTAssembly));
     } else {
-        pMainWindow->debugger()->sendCommand("-gdb-set", "disassembly-flavor att");
+        if (pSettings->debugger().useIntelStyle())
+            ui->txtCode->setSyntaxer(syntaxerManager.getSyntaxer(QSynedit::ProgrammingLanguage::Assembly));
+        else
+            ui->txtCode->setSyntaxer(syntaxerManager.getSyntaxer(QSynedit::ProgrammingLanguage::ATTAssembly));
     }
+    syntaxerManager.applyColorScheme(ui->txtCode->syntaxer(),
+                                        pSettings->editor().colorScheme());
 }
 
 void CPUDialog::closeEvent(QCloseEvent *event)
@@ -179,6 +192,7 @@ void CPUDialog::on_rdIntel_toggled(bool)
     updateInfo();
     pSettings->debugger().setUseIntelStyle(ui->rdIntel->isChecked());
     pSettings->debugger().save();
+    updateSyntaxer();
 }
 
 void CPUDialog::on_rdATT_toggled(bool)
@@ -186,6 +200,7 @@ void CPUDialog::on_rdATT_toggled(bool)
     updateInfo();
     pSettings->debugger().setUseIntelStyle(ui->rdIntel->isChecked());
     pSettings->debugger().save();
+    updateSyntaxer();
 }
 
 void CPUDialog::on_chkBlendMode_stateChanged(int)
@@ -193,17 +208,18 @@ void CPUDialog::on_chkBlendMode_stateChanged(int)
     updateInfo();
     pSettings->debugger().setBlendMode(ui->chkBlendMode->isCheckable());
     pSettings->debugger().save();
+    updateSyntaxer();
 }
 
 void CPUDialog::on_btnStepOverInstruction_clicked()
 {
-    pMainWindow->debugger()->sendCommand("-exec-next-instruction","");
+    pMainWindow->debugger()->stepOverInstruction();
 }
 
 
 void CPUDialog::on_btnStepIntoInstruction_clicked()
 {
-    pMainWindow->debugger()->sendCommand("-exec-step-instruction","");
+    pMainWindow->debugger()->stepIntoInstruction();
 }
 
 void CPUDialog::onUpdateIcons()
@@ -225,6 +241,7 @@ void CPUDialog::showEvent(QShowEvent *event)
         sizes[1] = std::max(0,totalSize - sizes[0]);
         ui->splitter->setSizes(sizes);
     }
+    ui->chkBlendMode->setVisible(pMainWindow->debugger()->supportDisassemlyBlendMode());
 }
 
 

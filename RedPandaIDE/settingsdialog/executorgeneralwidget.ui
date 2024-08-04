@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>617</width>
-    <height>449</height>
+    <width>635</width>
+    <height>504</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -21,6 +21,13 @@
        <widget class="QCheckBox" name="chkPauseConsole">
         <property name="text">
          <string>Pause console programs after return</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkVTSeq">
+        <property name="text">
+         <string>Enable ANSI Escape Sequences Support</string>
         </property>
        </widget>
       </item>
@@ -55,9 +62,19 @@
      <property name="checkable">
       <bool>true</bool>
      </property>
-     <layout class="QHBoxLayout" name="horizontalLayout">
+     <layout class="QVBoxLayout" name="verticalLayout_2">
       <item>
        <widget class="QLineEdit" name="txtExecuteParamaters"/>
+      </item>
+      <item>
+       <widget class="QLabel" name="labelParseArgsInJson">
+        <property name="text">
+         <string>Parsed argv array (represented in JSON):</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTextBrowser" name="txtParsedArgsInJson"/>
       </item>
      </layout>
     </widget>
@@ -75,7 +92,6 @@
        <widget class="QLabel" name="label_3">
         <property name="font">
          <font>
-          <weight>75</weight>
           <bold>true</bold>
          </font>
         </property>
@@ -88,7 +104,6 @@
        <widget class="QLabel" name="label_2">
         <property name="font">
          <font>
-          <weight>75</weight>
           <bold>true</bold>
          </font>
         </property>
@@ -101,7 +116,6 @@
        <widget class="QLabel" name="label_4">
         <property name="font">
          <font>
-          <weight>75</weight>
           <bold>true</bold>
          </font>
         </property>
@@ -117,10 +131,6 @@
         </property>
         <property name="text">
          <string>Browse</string>
-        </property>
-        <property name="icon">
-         <iconset resource="../icons.qrc">
-          <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
         </property>
        </widget>
       </item>
@@ -145,8 +155,17 @@
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="../icons.qrc"/>
- </resources>
+ <tabstops>
+  <tabstop>chkPauseConsole</tabstop>
+  <tabstop>chkVTSeq</tabstop>
+  <tabstop>chkMinimizeOnRun</tabstop>
+  <tabstop>grpExecuteParameters</tabstop>
+  <tabstop>txtExecuteParamaters</tabstop>
+  <tabstop>txtParsedArgsInJson</tabstop>
+  <tabstop>grpRedirectInput</tabstop>
+  <tabstop>txtRedirectInputFile</tabstop>
+  <tabstop>btnBrowse</tabstop>
+ </tabstops>
+ <resources/>
  <connections/>
 </ui>

@@ -16,6 +16,8 @@
  */
 #include "compiler.h"
 #include "utils.h"
+#include "utils/escape.h"
+#include "utils/parsearg.h"
 #include "compilermanager.h"
 #include "../systemconsts.h"
 
@@ -36,13 +38,15 @@
 
 #define COMPILE_PROCESS_END "---//END//----"
 
-Compiler::Compiler(const QString &filename, bool silent, bool onlyCheckSyntax):
-    QThread(),
-    mSilent(silent),
-    mOnlyCheckSyntax(onlyCheckSyntax),
-    mFilename(filename),
-    mRebuild(false)
+Compiler::Compiler(const QString &filename, bool onlyCheckSyntax):
+    QThread{},
+    mOnlyCheckSyntax{onlyCheckSyntax},
+    mFilename{filename},
+    mRebuild{false},
+    mParserForFile{},
+    mForceEnglishOutput{false}
 {
+    getParserForFile(filename);
 }
 
 void Compiler::run()
@@ -64,7 +68,15 @@ void Compiler::run()
         timer.start();
         runCommand(mCompiler, mArguments, mDirectory, pipedText());
         for(int i=0;i<mExtraArgumentsList.count();i++) {
-            runCommand(mExtraCompilersList[i],mExtraArgumentsList[i],mDirectory, pipedText());
+            if (!beforeRunExtraCommand(i))
+                break;
+            QString command = escapeCommandForLog(mExtraCompilersList[i], mExtraArgumentsList[i]);
+            if (mExtraOutputFilesList[i].isEmpty()) {
+                log(tr(" - Command: %1").arg(command));
+            } else {
+                log(tr(" - Command: %1 > %2").arg(command, escapeArgumentForPlatformShell(mExtraOutputFilesList[i], false)));
+            }
+            runCommand(mExtraCompilersList[i],mExtraArgumentsList[i],mDirectory, pipedText(),mExtraOutputFilesList[i]);
         }
         log("");
         log(tr("Compile Result:"));
@@ -136,7 +148,7 @@ int Compiler::getLineNumberFromOutputLine(QString &line)
         pos = line.indexOf(',');
     }
     if (pos>=0) {
-        result = line.midRef(0,pos).toInt();
+        result = QStringView(line.constData(), pos).toInt();
         if (result > 0)
             line.remove(0,pos+1);
     } else {
@@ -156,7 +168,7 @@ int Compiler::getColunmnFromOutputLine(QString &line)
         pos = line.indexOf(',');
     }
     if (pos>=0) {
-        result = line.midRef(0,pos).toInt();
+        result = QStringView(line.constData(), pos).toInt();
         if (result > 0)
             line.remove(0,pos+1);
     }
@@ -167,27 +179,42 @@ CompileIssueType Compiler::getIssueTypeFromOutputLine(QString &line)
 {
     CompileIssueType result = CompileIssueType::Other;
     line = line.trimmed();
-    int pos = line.indexOf(':');
-    if (pos>=0) {
-        QString s=line.mid(0,pos);
-        if (s == "error" || s == "fatal error") {
-            mErrorCount += 1;
-            line = tr("[Error] ")+line.mid(pos+1);
-            result = CompileIssueType::Error;
-        } else if (s == "warning") {
-            mWarningCount += 1;
-            line = tr("[Warning] ")+line.mid(pos+1);
-            result = CompileIssueType::Warning;
-        } else if (s == "info") {
-            mWarningCount += 1;
-            line = tr("[Info] ")+line.mid(pos+1);
-            result = CompileIssueType::Info;
-        } else if (s == "note") {
-            mWarningCount += 1;
-            line = tr("[Note] ")+line.mid(pos+1);
-            result = CompileIssueType::Note;
+    if (line.startsWith(tr("error:"))) {
+        mErrorCount += 1;
+        line = tr("[Error] ")+line.mid(tr("error:").length());
+        result = CompileIssueType::Error;
+    } else if (line.startsWith(tr("warning:"))) {
+        mWarningCount += 1;
+        line = tr("[Warning] ")+line.mid(tr("warning:").length());
+        result = CompileIssueType::Warning;
+    } else {
+        int pos = line.indexOf(':');
+        if (pos>=0) {
+            QString s=line.mid(0,pos);
+            if (s == "error" || s == "fatal error"
+                    || s == "syntax error") {
+                mErrorCount += 1;
+                line = tr("[Error] ")+line.mid(pos+1);
+                result = CompileIssueType::Error;
+            } else if (s.startsWith("warning")
+                       || s.startsWith(tr("warning"))) {
+                mWarningCount += 1;
+                line = tr("[Warning] ")+line.mid(pos+1);
+                result = CompileIssueType::Warning;
+            } else if (s == "info"
+                       || s == tr("info")) {
+                mWarningCount += 1;
+                line = tr("[Info] ")+line.mid(pos+1);
+                result = CompileIssueType::Info;
+            } else if (s == "note"
+                       || s == tr("note")) {
+                mWarningCount += 1;
+                line = tr("[Note] ")+line.mid(pos+1);
+                result = CompileIssueType::Note;
+            }
         }
     }
+
     return result;
 }
 
@@ -205,6 +232,11 @@ Settings::PCompilerSet Compiler::compilerSet()
 QByteArray Compiler::pipedText()
 {
     return QByteArray();
+}
+
+bool Compiler::beforeRunExtraCommand(int /* idx */)
+{
+    return true;
 }
 
 void Compiler::processOutput(QString &line)
@@ -316,36 +348,31 @@ void Compiler::stopCompile()
     mStop = true;
 }
 
-QString Compiler::getCharsetArgument(const QByteArray& encoding,FileType fileType, bool checkSyntax)
+QStringList Compiler::getCharsetArgument(const QByteArray& encoding,FileType fileType, bool checkSyntax)
 {
-    QString result;
+    QStringList result;
     bool forceExecUTF8=false;
     // test if force utf8 from autolink infos
     if ((fileType == FileType::CSource ||
-            fileType == FileType::CppSource) && pSettings->editor().enableAutolink() ){
-        Editor* editor = pMainWindow->editorList()->getEditor();
-        if (editor) {
-            PCppParser parser = editor->parser();
-            if (parser) {
-                int waitCount = 0;
-                //wait parsing ends, at most 1 second
-                while(parser->parsing()) {
-                    if (waitCount>10)
-                        break;
-                    waitCount++;
-                    QThread::msleep(100);
-                    QApplication *app=dynamic_cast<QApplication*>(
-                                QApplication::instance());
-                    app->processEvents();
-                }
-                QSet<QString> parsedFiles;
-                forceExecUTF8 = parseForceUTF8ForAutolink(
-                            editor->filename(),
-                            parsedFiles,
-                            parser);
-            }
+            fileType == FileType::CppSource) && pSettings->editor().enableAutolink()
+            && mParserForFile){
+        int waitCount = 0;
+        //wait parsing ends, at most 1 second
+        while(mParserForFile->parsing()) {
+            if (waitCount>10)
+                break;
+            waitCount++;
+            QThread::msleep(100);
+            QApplication *app=dynamic_cast<QApplication*>(
+                        QApplication::instance());
+            app->processEvents();
         }
-
+        if (waitCount<=10) {
+            QSet<QString> parsedFiles;
+            forceExecUTF8 = parseForceUTF8ForAutolink(
+                        mFilename,
+                        parsedFiles);
+        }
     }
     if ((forceExecUTF8 || compilerSet()->autoAddCharsetParams()) && encoding != ENCODING_ASCII
             && compilerSet()->compilerType()!=CompilerType::Clang) {
@@ -373,21 +400,22 @@ QString Compiler::getCharsetArgument(const QByteArray& encoding,FileType fileTyp
         }
         //qDebug()<<encodingName<<execEncodingName;
         if (checkSyntax) {
-            result += QString(" -finput-charset=%1")
-                    .arg(encodingName);
-        } else if (encodingName!=execEncodingName) {
-            result += QString(" -finput-charset=%1 -fexec-charset=%2")
-                    .arg(encodingName, execEncodingName);
+            result << "-finput-charset=" + encodingName;
+        } else if (QString::compare(encodingName, execEncodingName, Qt::CaseInsensitive) != 0) {
+            result += {
+                "-finput-charset=" + encodingName,
+                "-fexec-charset=" + execEncodingName,
+            };
         }
     }
     return result;
 }
 
-QString Compiler::getCCompileArguments(bool checkSyntax)
+QStringList Compiler::getCCompileArguments(bool checkSyntax)
 {
-    QString result;
+    QStringList result;
     if (checkSyntax) {
-        result += " -fsyntax-only";
+        result << "-fsyntax-only";
     }
 
     QMap<QString, QString> compileOptions;
@@ -401,37 +429,48 @@ QString Compiler::getCCompileArguments(bool checkSyntax)
             continue;
         PCompilerOption pOption = CompilerInfoManager::getCompilerOption(compilerSet()->compilerType(), key);
         if (pOption && pOption->isC && !pOption->isLinker) {
-            if (pOption->choices.isEmpty())
-                result += " " + pOption->setting;
-            else {
-                result += " " + pOption->setting + compileOptions[key];
+            if (pOption->type == CompilerOptionType::Checkbox)
+                result << pOption->setting;
+            else if (pOption->type == CompilerOptionType::Input)
+                result += {pOption->setting, compileOptions[key]};
+            else if (pOption->type == CompilerOptionType::Number) {
+                bool ok;
+                int val = compileOptions[key].toInt(&ok);
+                if (ok && val>0) {
+                    val = pOption->scale * val;
+                    result += QString("%1%2").arg(pOption->setting).arg(val);
+                }
+            } else {
+                result << pOption->setting + compileOptions[key];
             }
         }
     }
 
+    QMap<QString, QString> macros = devCppMacroVariables();
+
     if (compilerSet()->useCustomCompileParams() && !compilerSet()->customCompileParams().isEmpty()) {
-        QStringList params = textToLines(compilerSet()->customCompileParams());
-        foreach(const QString& param, params)
-            result += " "+ parseMacros(param);
+        result << parseArguments(compilerSet()->customCompileParams(), macros, true);
     }
 
     if (mProject) {
         QString s = mProject->options().compilerCmd;
         if (!s.isEmpty()) {
             s.replace("_@@_", " ");
-            QStringList params = textToLines(s);
-            foreach(const QString& param, params)
-                result += " "+ parseMacros(param);
+            result << parseArguments(s, macros, true);
         }
+    }
+
+    if (result.contains("-g3")) {
+        result << "-D_DEBUG";
     }
     return result;
 }
 
-QString Compiler::getCppCompileArguments(bool checkSyntax)
+QStringList Compiler::getCppCompileArguments(bool checkSyntax)
 {
-    QString result;
+    QStringList result;
     if (checkSyntax) {
-        result += " -fsyntax-only";
+        result << "-fsyntax-only";
     }
     QMap<QString, QString> compileOptions;
     if (mProject && !mProject->options().compilerOptions.isEmpty()) {
@@ -444,103 +483,108 @@ QString Compiler::getCppCompileArguments(bool checkSyntax)
             continue;
         PCompilerOption pOption = CompilerInfoManager::getCompilerOption(compilerSet()->compilerType(), key);
         if (pOption && pOption->isCpp && !pOption->isLinker) {
-            if (pOption->choices.isEmpty())
-                result += " " + pOption->setting;
-            else
-                result += " " + pOption->setting + compileOptions[key];
+            if (pOption->type == CompilerOptionType::Checkbox)
+                result << pOption->setting;
+            else if (pOption->type == CompilerOptionType::Input)
+                result += {pOption->setting, compileOptions[key]};
+            else if (pOption->type == CompilerOptionType::Number) {
+                bool ok;
+                int val = compileOptions[key].toInt(&ok);
+                if (ok && val>0) {
+                    val = pOption->scale * val;
+                    result += QString("%1%2").arg(pOption->setting).arg(val);
+                }
+            } else {
+                result << pOption->setting + compileOptions[key];
+            }
         }
     }
+
+    QMap<QString, QString> macros = devCppMacroVariables();
     if (compilerSet()->useCustomCompileParams() && !compilerSet()->customCompileParams().isEmpty()) {
-        QStringList params = textToLines(compilerSet()->customCompileParams());
-        foreach(const QString& param, params)
-            result += " "+ parseMacros(param);
+        result << parseArguments(compilerSet()->customCompileParams(), macros, true);
     }
     if (mProject) {
         QString s = mProject->options().cppCompilerCmd;
         if (!s.isEmpty()) {
             s.replace("_@@_", " ");
-            QStringList params = textToLines(s);
-            foreach(const QString& param, params)
-                result += " "+ parseMacros(param);
+            result << parseArguments(s, macros, true);
         }
     }
-    return result;
-}
 
-
-QString Compiler::getCIncludeArguments()
-{
-    QString result;
-    foreach (const QString& folder,compilerSet()->CIncludeDirs()) {
-        result += QString(" -I\"%1\"").arg(folder);
+    if (result.contains("-g3")) {
+        result << "-D_DEBUG";
     }
     return result;
 }
 
-QString Compiler::getProjectIncludeArguments()
+
+QStringList Compiler::getCIncludeArguments()
 {
-    QString result;
+    QStringList result;
+    foreach (const QString& folder,compilerSet()->CIncludeDirs()) {
+        result << "-I" + folder;
+    }
+    return result;
+}
+
+QStringList Compiler::getProjectIncludeArguments()
+{
+    QStringList result;
     if (mProject) {
         foreach (const QString& folder,mProject->options().includeDirs) {
-            result += QString(" -I\"%1\"").arg(folder);
+            result << "-I" + folder;
         }
 //        result +=  QString(" -I\"%1\"").arg(extractFilePath(mProject->filename()));
     }
     return result;
 }
 
-QString Compiler::getCppIncludeArguments()
+QStringList Compiler::getCppIncludeArguments()
 {
-    QString result;
+    QStringList result;
     foreach (const QString& folder,compilerSet()->CppIncludeDirs()) {
-        result += QString(" -I\"%1\"").arg(folder);
+        result << "-I" + folder;
     }
     return result;
 }
 
-QString Compiler::getLibraryArguments(FileType fileType)
+QStringList Compiler::getLibraryArguments(FileType fileType)
 {
-    QString result;
+    QStringList result;
 
     //Add libraries
     foreach (const QString& folder, compilerSet()->libDirs()) {
-        result += QString(" -L\"%1\"").arg(folder);
+        result << "-L" + folder;
     }
 
     //add libs added via project
     if (mProject) {
         foreach (const QString& folder, mProject->options().libDirs){
-            result += QString(" -L\"%1\"").arg(folder);
+            result << "-L" + folder;
         }
     }
 
     //Add auto links
     // is file and auto link enabled
     if (pSettings->editor().enableAutolink() && (fileType == FileType::CSource ||
-            fileType == FileType::CppSource)){
-        Editor* editor = pMainWindow->editorList()->getEditor();
-        if (editor) {
-            PCppParser parser = editor->parser();
-            if (parser) {
-                int waitCount = 0;
-                //wait parsing ends, at most 1 second
-                while(parser->parsing()) {
-                    if (waitCount>10)
-                        break;
-                    waitCount++;
-                    QThread::msleep(100);
-                    QApplication *app=dynamic_cast<QApplication*>(
-                                QApplication::instance());
-                    app->processEvents();
-                }
-                QSet<QString> parsedFiles;
-                result += parseFileIncludesForAutolink(
-                            editor->filename(),
-                            parsedFiles,
-                            parser);
-            }
+            fileType == FileType::CppSource)
+            && mParserForFile){
+        int waitCount = 0;
+        //wait parsing ends, at most 1 second
+        while(mParserForFile->parsing()) {
+            if (waitCount>10)
+                break;
+            waitCount++;
+            QThread::msleep(100);
+            QApplication *app=dynamic_cast<QApplication*>(
+                        QApplication::instance());
+            app->processEvents();
         }
-
+        if (waitCount<=10) {
+            QSet<QString> parsedFiles;
+            result += parseFileIncludesForAutolink(mFilename, parsedFiles);
+        }
     }
 
     //add compiler set link options
@@ -556,62 +600,68 @@ QString Compiler::getLibraryArguments(FileType fileType)
             continue;
         PCompilerOption pOption = CompilerInfoManager::getCompilerOption(compilerSet()->compilerType(), key);
         if (pOption && pOption->isLinker) {
-            if (pOption->choices.isEmpty())
-                result += " " + pOption->setting;
-            else
-                result += " " + pOption->setting + compileOptions[key];
+            if (pOption->type == CompilerOptionType::Checkbox)
+                result << pOption->setting;
+            else if (pOption->type == CompilerOptionType::Input)
+                result += {pOption->setting, compileOptions[key]};
+            else if (pOption->type == CompilerOptionType::Number) {
+                bool ok;
+                int val = compileOptions[key].toInt(&ok);
+                if (ok && val>0) {
+                    val = pOption->scale * val;
+                    result += QString("%1%2").arg(pOption->setting).arg(val);
+                }
+            } else {
+                result << pOption->setting + compileOptions[key];
+            }
         }
     }
 
     // Add global compiler linker extras
     if (compilerSet()->useCustomLinkParams() && !compilerSet()->customLinkParams().isEmpty()) {
-       QStringList params = textToLines(compilerSet()->customLinkParams());
-       if (!params.isEmpty()) {
+        QMap<QString, QString> macros = devCppMacroVariables();
+        QStringList params = parseArguments(compilerSet()->customLinkParams(), macros, true);
+        if (!params.isEmpty()) {
             foreach(const QString& param, params)
-                result += " " + param;
-       }
+                result << param;
+        }
     }
 
     if (mProject) {
         if (mProject->options().type == ProjectType::GUI) {
-            result += " -mwindows";
+            result << "-mwindows";
         }
 
         if (!mProject->options().linkerCmd.isEmpty()) {
             QString s = mProject->options().linkerCmd;
             if (!s.isEmpty()) {
-                s.replace("_@@_", " ");
-                QStringList params = textToLines(s);
-                if (!params.isEmpty()) {
-                     foreach(const QString& param, params)
-                         result += " " + param;
-                }
+                s.replace("_@@_", " "); // historical reason
+                result += parseArguments(s, {}, true);
             }
         }
         if (mProject->options().staticLink)
-            result += " -static";
+            result << "-static";
     } else {
         if (compilerSet()->staticLink()) {
-            result += " -static";
+            result << "-static";
         }
     }
     return result;
 }
 
-QString Compiler::parseFileIncludesForAutolink(
+QStringList Compiler::parseFileIncludesForAutolink(
         const QString &filename,
-        QSet<QString>& parsedFiles,
-        PCppParser& parser)
+        QSet<QString>& parsedFiles)
 {
-    QString result;
+    QStringList result;
     if (parsedFiles.contains(filename))
         return result;
     parsedFiles.insert(filename);
     PAutolink autolink = pAutolinkManager->getLink(filename);
     if (autolink) {
-        result += ' '+autolink->linkOption;
+        result += parseArgumentsWithoutVariables(autolink->linkOption);
     }
-    QStringList includedFiles = parser->getFileDirectIncludes(filename);
+    QStringList includedFiles = mParserForFile->getFileDirectIncludes(filename);
 //    log(QString("File %1 included:").arg(filename));
 //    for (int i=includedFiles.size()-1;i>=0;i--) {
 //        QString includeFilename = includedFiles[i];
@@ -620,15 +670,12 @@ QString Compiler::parseFileIncludesForAutolink(
 
     for (int i=includedFiles.size()-1;i>=0;i--) {
         QString includeFilename = includedFiles[i];
-        result += parseFileIncludesForAutolink(
-                    includeFilename,
-                    parsedFiles,
-                    parser);
+        result += parseFileIncludesForAutolink(includeFilename, parsedFiles);
     }
     return result;
 }
 
-bool Compiler::parseForceUTF8ForAutolink(const QString &filename, QSet<QString> &parsedFiles, PCppParser &parser)
+bool Compiler::parseForceUTF8ForAutolink(const QString &filename, QSet<QString> &parsedFiles)
 {
     bool result;
     if (parsedFiles.contains(filename))
@@ -638,7 +685,7 @@ bool Compiler::parseForceUTF8ForAutolink(const QString &filename, QSet<QString> 
     if (autolink && autolink->execUseUTF8) {
         return true;
     }
-    QStringList includedFiles = parser->getFileDirectIncludes(filename);
+    QStringList includedFiles = mParserForFile->getFileDirectIncludes(filename);
 //    log(QString("File %1 included:").arg(filename));
 //    for (int i=includedFiles.size()-1;i>=0;i--) {
 //        QString includeFilename = includedFiles[i];
@@ -649,22 +696,32 @@ bool Compiler::parseForceUTF8ForAutolink(const QString &filename, QSet<QString> 
         QString includeFilename = includedFiles[i];
         result = parseForceUTF8ForAutolink(
                     includeFilename,
-                    parsedFiles,
-                    parser);
+                    parsedFiles);
         if (result)
             return true;
     }
     return false;
 }
 
-void Compiler::runCommand(const QString &cmd, const QString  &arguments, const QString &workingDir, const QByteArray& inputText)
+void Compiler::runCommand(const QString &cmd, const QStringList &arguments, const QString &workingDir, const QByteArray& inputText, const QString& outputFile)
 {
     QProcess process;
     mStop = false;
     bool errorOccurred = false;
     process.setProgram(cmd);
     QString cmdDir = extractFileDir(cmd);
+    bool compilerErrorUTF8=compilerSet()->isCompilerInfoUsingUTF8();
+    bool outputUTF8=compilerSet()->forceUTF8();
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+#ifdef Q_OS_WIN
+    QStringList binDirs=compilerSet()->binDirs();
+    if (!cmdDir.isEmpty())
+        binDirs.insert(0, cmdDir);
+    QString windir = env.value("windir");
+    binDirs.append(windir+"\\system32");
+    binDirs.append(windir);
+    env.insert("PATH",binDirs.join(PATH_SEPARATOR));
+#else
     if (!cmdDir.isEmpty()) {
         QString path = env.value("PATH");
         if (path.isEmpty()) {
@@ -674,29 +731,43 @@ void Compiler::runCommand(const QString &cmd, const QString  &arguments, const Q
         }
         env.insert("PATH",path);
     }
-    //env.insert("LANG","en");
-    env.insert("LDFLAGS","-Wl,--stack,12582912");
+#endif
+    if (compilerSet() && compilerSet()->forceEnglishOutput())
+        env.insert("LANG","en");
+    //env.insert("LDFLAGS","-Wl,--stack,12582912");
+    env.insert("LDFLAGS","");
     env.insert("CFLAGS","");
     env.insert("CXXFLAGS","");
     process.setProcessEnvironment(env);
-    process.setArguments(splitProcessCommand(arguments));
+    process.setArguments(arguments);
     process.setWorkingDirectory(workingDir);
-
+    QFile output;
+    if (!outputFile.isEmpty()) {
+        output.setFileName(outputFile);
+        if (!output.open(QFile::WriteOnly | QFile::Truncate)) {
+            this->error(tr("Can't open file \"%1\" for write!"));
+            return;
+        };
+    }
     process.connect(&process, &QProcess::errorOccurred,
                     [&](){
                         errorOccurred= true;
                     });
-    process.connect(&process, &QProcess::readyReadStandardError,[&process,this](){
-        if (compilerSet()->compilerType() == CompilerType::Clang)
+    process.connect(&process, &QProcess::readyReadStandardError,[&process,this,compilerErrorUTF8](){
+        if (compilerErrorUTF8)
             this->error(QString::fromUtf8(process.readAllStandardError()));
         else
             this->error(QString::fromLocal8Bit( process.readAllStandardError()));
     });
-    process.connect(&process, &QProcess::readyReadStandardOutput,[&process,this](){
-        if (compilerSet()->compilerType() == CompilerType::Clang)
-            this->log(QString::fromUtf8(process.readAllStandardOutput()));
-        else
-            this->log(QString::fromLocal8Bit( process.readAllStandardOutput()));
+    process.connect(&process, &QProcess::readyReadStandardOutput,[&process,this,outputUTF8,&outputFile,&output](){
+        if (!outputFile.isEmpty()) {
+            output.write(process.readAllStandardOutput());
+        } else {
+            if (outputUTF8)
+                this->log(QString::fromUtf8(process.readAllStandardOutput()));
+            else
+                this->log(QString::fromLocal8Bit( process.readAllStandardOutput()));
+        }
     });
     process.connect(&process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),[this](){
         this->error(COMPILE_PROCESS_END);
@@ -743,6 +814,30 @@ void Compiler::runCommand(const QString &cmd, const QString  &arguments, const Q
             break;
         default:
             throw CompileError(tr("An unknown error occurred."));
+        }
+    }
+    if (!outputFile.isEmpty())
+        output.close();
+}
+
+QString Compiler::escapeCommandForLog(const QString &cmd, const QStringList &arguments)
+{
+    return escapeCommandForPlatformShell(extractFileName(cmd), arguments);
+}
+
+PCppParser Compiler::parser() const
+{
+    return mParserForFile;
+}
+
+void Compiler::getParserForFile(const QString &filename)
+{
+    FileType fileType = getFileType(filename);
+    if (fileType == FileType::CSource ||
+            fileType == FileType::CppSource){
+        Editor* editor = pMainWindow->editorList()->getOpenedEditorByFilename(filename);
+        if (editor && editor->parser()) {
+            mParserForFile=editor->parser();
         }
     }
 }

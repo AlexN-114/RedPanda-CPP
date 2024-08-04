@@ -35,7 +35,8 @@ enum class ProjectType {
     GUI=0,
     Console=1,
     StaticLib=2,
-    DynamicLib=3
+    DynamicLib=3,
+    MicroController=4,
 };
 
 struct ProjectVersionInfo{
@@ -75,16 +76,16 @@ struct ProjectOptions{
     QStringList makeIncludes;
     bool isCpp;
     QString icon;
-    QString exeOutput;
-    QString objectOutput;
-    QString logOutput;
-    bool logOutputEnabled;
+    QString folderForOutput;
+    QString folderForObjFiles;
+    QString logFilename;
+    bool logOutput;
     bool useCustomMakefile;
     QString customMakefile;
     bool usePrecompiledHeader;
     QString precompiledHeader;
-    bool overrideOutput;
-    QString overridenOutput;
+    bool useCustomOutputFilename;
+    QString customOutputFilename;
     QString hostApplication;
     bool includeVersionInfo;
     bool supportXPThemes;

@@ -13,29 +13,92 @@
   <property name="windowTitle">
    <string>Form</string>
   </property>
-  <layout class="QGridLayout" name="gridLayout">
-   <item row="0" column="1">
-    <widget class="QLineEdit" name="txtTerminal"/>
-   </item>
-   <item row="0" column="2">
-    <widget class="QToolButton" name="btnChooseTerminal">
-     <property name="text">
-      <string>...</string>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="grpUseCustomTerminal">
+     <property name="title">
+      <string>Use custom terminal</string>
      </property>
-     <property name="icon">
-      <iconset resource="../icons.qrc">
-       <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
+     <property name="checkable">
+      <bool>true</bool>
      </property>
+     <property name="checked">
+      <bool>true</bool>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_2">
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="txtTerminal">
+        <property name="text">
+         <string notr="true"/>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="txtArgsPattern">
+        <property name="text">
+         <string notr="true">$term -e $argv</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelArgsPattern">
+        <property name="text">
+         <string>Args. pattern</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="2">
+       <widget class="QToolButton" name="btnChooseTerminal">
+        <property name="text">
+         <string>...</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="2">
+       <widget class="QToolButton" name="btnAutoDetectArgsPattern">
+        <property name="toolTip">
+         <string>Auto Detect Terminal Arguments Pattern</string>
+        </property>
+        <property name="text">
+         <string>...</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelTerminal">
+        <property name="text">
+         <string>Terminal</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelCmdPreview">
+        <property name="text">
+         <string>Cmd. preview</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="2">
+       <widget class="QToolButton" name="btnTest">
+        <property name="toolTip">
+         <string>Test Command</string>
+        </property>
+        <property name="text">
+         <string>...</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QPlainTextEdit" name="labelCmdPreviewResult">
+        <property name="readOnly">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
-   <item row="0" column="0">
-    <widget class="QLabel" name="label">
-     <property name="text">
-      <string>Terminal</string>
-     </property>
-    </widget>
-   </item>
-   <item row="1" column="2">
+   <item>
     <spacer name="verticalSpacer">
      <property name="orientation">
       <enum>Qt::Vertical</enum>
@@ -50,8 +113,15 @@
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="../icons.qrc"/>
- </resources>
+ <tabstops>
+  <tabstop>grpUseCustomTerminal</tabstop>
+  <tabstop>txtTerminal</tabstop>
+  <tabstop>btnChooseTerminal</tabstop>
+  <tabstop>txtArgsPattern</tabstop>
+  <tabstop>btnAutoDetectArgsPattern</tabstop>
+  <tabstop>labelCmdPreviewResult</tabstop>
+  <tabstop>btnTest</tabstop>
+ </tabstops>
+ <resources/>
  <connections/>
 </ui>

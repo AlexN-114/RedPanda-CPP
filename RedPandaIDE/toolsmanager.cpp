@@ -21,6 +21,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMessageBox>
+#include <QUuid>
 #include "settings.h"
 #include "systemconsts.h"
 
@@ -36,6 +37,7 @@ void ToolsManager::load()
     if (!fileExists(filename)) {
         mTools.clear();
         PToolItem item = std::make_shared<ToolItem>();
+        item->id = QUuid::createUuid().toString();
         item->title = tr("Remove Compiled");
 #ifdef Q_OS_WIN
         item->program = "del";
@@ -43,8 +45,14 @@ void ToolsManager::load()
         item->program = "rm";
 #endif
         item->workingDirectory = "<SOURCEPATH>";
-        item->parameters = "<EXENAME>";
-        item->pauseAfterExit = false;
+#ifdef Q_OS_WIN
+        item->parameters = "/q /f <EXENAME>";
+#else
+        item->parameters = "-f <EXENAME>";
+#endif
+        item->inputOrigin = ToolItemInputOrigin::None;
+        item->outputTarget = ToolItemOutputTarget::RedirectToToolsOutputPanel;
+        item->isUTF8 = false;
         mTools.append(item);
 //#ifdef Q_OS_WIN
 //        item = std::make_shared<ToolItem>();
@@ -55,6 +63,7 @@ void ToolsManager::load()
 //        item->pauseAfterExit = false;
 //        mTools.append(item);
 //#endif
+        save();
         return;
     }
     //read config file
@@ -67,7 +76,9 @@ void ToolsManager::load()
         return;
     }
 
-    QByteArray json = file.readAll();
+    QByteArray json = file.readAll().trimmed();
+    if (json.isEmpty())
+        return;
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(json,&error);
     if (error.error != QJsonParseError::NoError) {
@@ -82,13 +93,19 @@ void ToolsManager::load()
     foreach (const QJsonValue& value,array) {
         QJsonObject object = value.toObject();
         PToolItem item = std::make_shared<ToolItem>();
+        if (!object.contains("id"))
+            item->id = QUuid::createUuid().toString();
+        else
+            item->id = object["id"].toString();
         item->title = object["title"].toString();
         if (item->title.isEmpty())
             continue;
         item->program = object["program"].toString();
         item->workingDirectory = object["workingDirectory"].toString();
         item->parameters = object["parameters"].toString();
-        item->pauseAfterExit = object["pauseAfterExit"].toBool();
+        item->outputTarget = static_cast<ToolItemOutputTarget>(object["outputTarget"].toInt(0));
+        item->inputOrigin= static_cast<ToolItemInputOrigin>(object["inputOrigin"].toInt(0));
+        item->isUTF8 = object["isUTF8"].toBool(true);
         mTools.append(item);
     }
 }
@@ -107,11 +124,14 @@ void ToolsManager::save()
     QJsonArray array;
     foreach (const PToolItem& tool,mTools) {
         QJsonObject object;
+        object["id"]=tool->id;
         object["title"]=tool->title;
         object["program"]=tool->program;
         object["workingDirectory"] = tool->workingDirectory;
         object["parameters"]=tool->parameters;
-        object["pauseAfterExit"]=tool->pauseAfterExit;
+        object["outputTarget"]=static_cast<int>(tool->outputTarget);
+        object["inputOrigin"]=static_cast<int>(tool->inputOrigin);
+        object["isUTF8"]=tool->isUTF8;
         array.append(object);
     }
     QJsonDocument doc;

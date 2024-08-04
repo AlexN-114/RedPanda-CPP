@@ -26,6 +26,10 @@
 QStringList CppDirectives;
 QStringList JavadocTags;
 QMap<QString,KeywordType> CppKeywords;
+#ifdef ENABLE_SDCC
+QMap<QString,KeywordType> SDCCKeywords;
+QSet<QString> SDCCTypeKeywords;
+#endif
 QSet<QString> CppControlKeyWords;
 QSet<QString> CppTypeKeywords;
 QSet<QString> CKeywords;
@@ -131,21 +135,21 @@ void initParser()
     CppKeywords.insert("__asm",KeywordType::SkipNextParenthesis);
     // Skip to {
 
+    CppKeywords.insert("requires",KeywordType::Requires);
+    CppKeywords.insert("concept",KeywordType::Concept);
+
     // wont handle
 
     //Not supported yet
     CppKeywords.insert("atomic_cancel",KeywordType::None);
     CppKeywords.insert("atomic_commit",KeywordType::None);
     CppKeywords.insert("atomic_noexcept",KeywordType::None);
-    CppKeywords.insert("concept",KeywordType::None);
     CppKeywords.insert("consteval",KeywordType::None);
     CppKeywords.insert("constinit",KeywordType::None);
-    CppKeywords.insert("co_wait",KeywordType::None);
+    CppKeywords.insert("co_await",KeywordType::None);
     CppKeywords.insert("co_return",KeywordType::None);
     CppKeywords.insert("co_yield",KeywordType::None);
     CppKeywords.insert("reflexpr",KeywordType::None);
-    CppKeywords.insert("requires",KeywordType::None);
-
     // its a type
     CppKeywords.insert("auto",KeywordType::None);
     CppKeywords.insert("bool",KeywordType::None);
@@ -163,6 +167,36 @@ void initParser()
     CppKeywords.insert("void",KeywordType::None);
     CppKeywords.insert("wchar_t",KeywordType::None);
 
+#ifdef ENABLE_SDCC
+    SDCCKeywords.insert("__sfr",KeywordType::None);
+    SDCCKeywords.insert("__sfr16",KeywordType::None);
+    SDCCKeywords.insert("__sfr32",KeywordType::None);
+    SDCCKeywords.insert("__sbit",KeywordType::None);
+    SDCCKeywords.insert("__bit",KeywordType::None);
+    SDCCKeywords.insert("__data",KeywordType::SkipItself);
+    SDCCKeywords.insert("__near",KeywordType::SkipItself);
+    SDCCKeywords.insert("__xdata",KeywordType::SkipItself);
+    SDCCKeywords.insert("__far",KeywordType::SkipItself);
+    SDCCKeywords.insert("__idata",KeywordType::SkipItself);
+    SDCCKeywords.insert("__pdata",KeywordType::SkipItself);
+    SDCCKeywords.insert("__code",KeywordType::SkipItself);
+    SDCCKeywords.insert("__banked",KeywordType::SkipItself);
+    SDCCKeywords.insert("__at",KeywordType::SkipNextParenthesis);
+    SDCCKeywords.insert("__reentrant",KeywordType::SkipItself);
+    SDCCKeywords.insert("__interrupt",KeywordType::SkipItself);
+    SDCCKeywords.insert("__using",KeywordType::SkipItself);
+    SDCCKeywords.insert("__critical",KeywordType::SkipItself);
+    SDCCKeywords.insert("__trap",KeywordType::SkipItself);
+    SDCCKeywords.insert("__asm",KeywordType::SkipItself);
+    SDCCKeywords.insert("__endasm",KeywordType::SkipItself);
+    SDCCKeywords.insert("__naked",KeywordType::SkipItself);
+
+    SDCCTypeKeywords.insert("__sfr");
+    SDCCTypeKeywords.insert("__sfr16");
+    SDCCTypeKeywords.insert("__sfr32");
+    SDCCTypeKeywords.insert("__sbit");
+    SDCCTypeKeywords.insert("__bit");
+#endif
     // type keywords
     CppTypeKeywords.insert("auto");
     CppTypeKeywords.insert("bool");
@@ -184,7 +218,7 @@ void initParser()
 
     // it's part of type info
     CppKeywords.insert("const",KeywordType::None);
-    CppKeywords.insert("extern",KeywordType::None);
+    CppKeywords.insert("extern",KeywordType::Extern);
 
     CppKeywords.insert("operator",KeywordType::Operator);
 
@@ -310,6 +344,7 @@ void initParser()
 
     AutoTypes.insert("auto");
     AutoTypes.insert("auto &");
+    AutoTypes.insert("auto &&");
     AutoTypes.insert("const auto");
     AutoTypes.insert("const auto &");
 
@@ -494,7 +529,6 @@ bool isHFile(const QString& filename)
 {
     if (filename.isEmpty())
         return false;
-
     QFileInfo fileInfo(filename);
     return CppHeaderExts->contains(fileInfo.suffix().toLower());
 
@@ -509,7 +543,7 @@ bool isCFile(const QString& filename)
     return CppSourceExts->contains(fileInfo.suffix().toLower());
 }
 
-PStatement CppScopes::findScopeAtLine(int line)
+PStatement CppScopes::findScopeAtLine(int line) const
 {
     if (mScopes.isEmpty())
         return PStatement();
@@ -541,28 +575,14 @@ void CppScopes::addScope(int line, PStatement scopeStatement)
     scope->startLine = line;
     scope->statement = scopeStatement;
     mScopes.append(scope);
-    if (!mScopes.isEmpty() && mScopes.back()->startLine>line) {
+#ifdef QT_DEBUG
+    if (!mScopes.isEmpty() && mScopes.back()->startLine > line) {
         qDebug()<<QString("Error: new scope %1 at %2 which is less that last scope %3")
-                  .arg(scopeStatement->fullName, line,mScopes.back()->startLine>line);
+                  .arg(scopeStatement->fullName)
+                  .arg(line)
+                  .arg(mScopes.back()->startLine);
     }
-}
-
-PStatement CppScopes::lastScope()
-{
-    if (mScopes.isEmpty())
-        return PStatement();
-    return mScopes.back()->statement;
-}
-
-void CppScopes::removeLastScope()
-{
-    if (!mScopes.isEmpty())
-        mScopes.pop_back();
-}
-
-void CppScopes::clear()
-{
-    mScopes.clear();
+#endif
 }
 
 MemberOperatorType getOperatorType(const QString &phrase, int index)
@@ -583,10 +603,10 @@ MemberOperatorType getOperatorType(const QString &phrase, int index)
 bool isScopeTypeKind(StatementKind kind)
 {
     switch(kind) {
-    case StatementKind::skClass:
-    case StatementKind::skNamespace:
-    case StatementKind::skEnumType:
-    case StatementKind::skEnumClassType:
+    case StatementKind::Class:
+    case StatementKind::Namespace:
+    case StatementKind::EnumType:
+    case StatementKind::EnumClassType:
         return true;
     default:
         return false;
@@ -678,17 +698,17 @@ bool isMemberOperator(QString token)
 StatementKind getKindOfStatement(const PStatement& statement)
 {
     if (!statement)
-        return StatementKind::skUnknown;
-    if (statement->kind == StatementKind::skVariable) {
+        return StatementKind::Unknown;
+    if (statement->kind == StatementKind::Variable) {
         if (!statement->parentScope.lock()) {
-            return StatementKind::skGlobalVariable;
+            return StatementKind::GlobalVariable;
         }  else if (statement->scope == StatementScope::Local) {
-            return StatementKind::skLocalVariable;
+            return StatementKind::LocalVariable;
         } else {
-            return StatementKind::skVariable;
+            return StatementKind::Variable;
         }
-    } else if (statement->kind == StatementKind::skParameter) {
-        return StatementKind::skLocalVariable;
+    } else if (statement->kind == StatementKind::Parameter) {
+        return StatementKind::LocalVariable;
     }
     return statement->kind;
 }
@@ -720,14 +740,27 @@ bool isCppControlKeyword(const QString &word)
 bool isTypeKind(StatementKind kind)
 {
     switch(kind) {
-    case StatementKind::skClass:
-    case StatementKind::skNamespace:
-    case StatementKind::skEnumType:
-    case StatementKind::skEnumClassType:
-    case StatementKind::skTypedef:
-    case StatementKind::skPreprocessor:
+    case StatementKind::Class:
+    case StatementKind::Namespace:
+    case StatementKind::EnumType:
+    case StatementKind::EnumClassType:
+    case StatementKind::Typedef:
+    case StatementKind::Preprocessor:
         return true;
     default:
         return false;
     }
+}
+
+bool ParsedFileInfo::isLineVisible(int line) const
+{
+    int lastI=-1;
+    for(auto it=mBranches.begin();it!=mBranches.end();++it) {
+        int i = it.key();
+        if (line<i)
+            break;
+        else
+            lastI = i;
+    }
+    return lastI<0?true:mBranches[lastI];
 }

@@ -68,7 +68,9 @@ PColorScheme ColorScheme::load(const QString &filename)
         qDebug()<<QObject::tr("Can't open file '%1' for read").arg(file.fileName());
         return PColorScheme();
     }
-    QByteArray content = file.readAll();
+    QByteArray content = file.readAll().trimmed();
+    if (content.isEmpty())
+        return PColorScheme();
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(content,&error);
     if (error.error!=QJsonParseError::NoError) {
@@ -536,7 +538,7 @@ void ColorManager::initItemDefines()
     addDefine(COLOR_SCHEME_GUTTER,
               QObject::tr("Gutter"),
               QObject::tr("Editor"),
-              true,true,true);
+              true,true,false);
     addDefine(COLOR_SCHEME_GUTTER_ACTIVE_LINE,
               QObject::tr("Gutter Active Line"),
               QObject::tr("Editor"),
@@ -692,53 +694,53 @@ void ColorManager::updateStatementColors(std::shared_ptr<QHash<StatementKind, st
     PColorSchemeItem item;
     item = getItem(schemeName, SYNS_AttrFunction);
     if (item) {
-        statementColors->insert(StatementKind::skFunction,item);
-        statementColors->insert(StatementKind::skConstructor,item);
-        statementColors->insert(StatementKind::skDestructor,item);
+        statementColors->insert(StatementKind::Function,item);
+        statementColors->insert(StatementKind::Constructor,item);
+        statementColors->insert(StatementKind::Destructor,item);
     }
     item = getItem(schemeName, SYNS_AttrClass);
     if (item) {
-        statementColors->insert(StatementKind::skClass,item);
-        statementColors->insert(StatementKind::skTypedef,item);
-        statementColors->insert(StatementKind::skAlias,item);
+        statementColors->insert(StatementKind::Class,item);
+        statementColors->insert(StatementKind::Typedef,item);
+        statementColors->insert(StatementKind::Alias,item);
     }
     item = getItem(schemeName, SYNS_AttrIdentifier);
     if (item) {
-        statementColors->insert(StatementKind::skEnumType,item);
-        statementColors->insert(StatementKind::skEnumClassType,item);
+        statementColors->insert(StatementKind::EnumType,item);
+        statementColors->insert(StatementKind::EnumClassType,item);
     }
     item = getItem(schemeName, SYNS_AttrVariable);
     if (item) {
-        statementColors->insert(StatementKind::skVariable,item);
+        statementColors->insert(StatementKind::Variable,item);
     }
     item = getItem(schemeName, SYNS_AttrLocalVariable);
     if (item) {
-        statementColors->insert(StatementKind::skLocalVariable,item);
-        statementColors->insert(StatementKind::skParameter,item);
+        statementColors->insert(StatementKind::LocalVariable,item);
+        statementColors->insert(StatementKind::Parameter,item);
     }
     item = getItem(schemeName, SYNS_AttrGlobalVariable);
     if (item) {
-        statementColors->insert(StatementKind::skGlobalVariable,item);
+        statementColors->insert(StatementKind::GlobalVariable,item);
     }
     item = getItem(schemeName, SYNS_AttrPreprocessor);
     if (item) {
-        statementColors->insert(StatementKind::skPreprocessor,item);
-        statementColors->insert(StatementKind::skEnum,item);
+        statementColors->insert(StatementKind::Preprocessor,item);
+        statementColors->insert(StatementKind::Enum,item);
     }
     item = getItem(schemeName, SYNS_AttrReservedWord);
     if (item) {
-        statementColors->insert(StatementKind::skKeyword,item);
-        statementColors->insert(StatementKind::skUserCodeSnippet,item);
-        statementColors->insert(StatementKind::skKeywordType,item);
+        statementColors->insert(StatementKind::Keyword,item);
+        statementColors->insert(StatementKind::UserCodeSnippet,item);
+        statementColors->insert(StatementKind::KeywordType,item);
     }
     item = getItem(schemeName, SYNS_AttrReserveWord_Type);
     if (item) {
-        statementColors->insert(StatementKind::skKeywordType,item);
+        statementColors->insert(StatementKind::KeywordType,item);
     }
     item = getItem(schemeName, SYNS_AttrString);
     if (item) {
-        statementColors->insert(StatementKind::skNamespace,item);
-        statementColors->insert(StatementKind::skNamespaceAlias,item);
+        statementColors->insert(StatementKind::Namespace,item);
+        statementColors->insert(StatementKind::NamespaceAlias,item);
     }
 }
 

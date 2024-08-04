@@ -25,6 +25,7 @@
 #include <memory>
 #include <QThread>
 #include <QProcessEnvironment>
+#include <QTemporaryFile>
 #define SI_NO_CONVERSION
 #include "SimpleIni.h"
 #include "qt_utils/utils.h"
@@ -47,6 +48,7 @@ enum class FileType{
     Text, // text file
     FragmentShader,
     VerticeShader,
+    ModuleDef, // Windows Module Definition
     Other // any others
 };
 
@@ -107,15 +109,34 @@ enum class SplitProcessCommandQuoteType {
     Double
 };
 
-FileType getFileType(const QString& filename);
-QStringList splitProcessCommand(const QString& cmd);
+enum class ProblemCaseValidateType {
+    Exact,
+    IgnoreLeadingTrailingSpaces,
+    IgnoreSpaces
+};
 
-QString genMakePath(const QString& fileName,bool escapeSpaces, bool encloseInQuotes);
-QString genMakePath1(const QString& fileName);
-QString genMakePath2(const QString& fileName);
+struct NonExclusiveTemporaryFileOwner {
+    const QString filename;
+
+    // take ownership
+    explicit NonExclusiveTemporaryFileOwner(std::unique_ptr<QTemporaryFile> &tempFile);
+
+    NonExclusiveTemporaryFileOwner(const NonExclusiveTemporaryFileOwner &) = delete;
+    NonExclusiveTemporaryFileOwner(NonExclusiveTemporaryFileOwner &&) = delete;
+    NonExclusiveTemporaryFileOwner& operator=(const NonExclusiveTemporaryFileOwner &) = delete;
+    NonExclusiveTemporaryFileOwner& operator=(NonExclusiveTemporaryFileOwner &&) = delete;
+    ~NonExclusiveTemporaryFileOwner();
+};
+
+using PNonExclusiveTemporaryFileOwner = std::unique_ptr<NonExclusiveTemporaryFileOwner>;
+
+FileType getFileType(const QString& filename);
+
 bool programHasConsole(const QString& filename);
 
 QString parseMacros(const QString& s);
+QString parseMacros(const QString& s, const QMap<QString, QString>& variables);
+QMap<QString, QString> devCppMacroVariables();
 
 class CppParser;
 void resetCppParser(std::shared_ptr<CppParser> parser, int compilerSetIndex=-1);
@@ -127,17 +148,23 @@ QByteArray runAndGetOutput(const QString& cmd, const QString& workingDir, const 
                            bool inheritEnvironment = false,
                            const QProcessEnvironment& env = QProcessEnvironment() );
 
+QByteArray reformatContentUsingAstyle(const QByteArray& content, const QStringList& arguments);
+
 void openFileFolderInExplorer(const QString& path);
 
 void executeFile(const QString& fileName,
-                 const QString& params,
+                 const QStringList& params,
                  const QString& workingDir,
                  const QString& tempFile);
 
+#ifdef Q_OS_WIN
 bool isGreenEdition();
+#else
+constexpr bool isGreenEdition() { return false; }
+#endif
 
 #ifdef Q_OS_WIN
-bool readRegistry(HKEY key,const QByteArray& subKey, const QByteArray& name, QString& value);
+bool readRegistry(HKEY key, const QString& subKey, const QString& name, QString& value);
 #endif
 
 qulonglong stringToHex(const QString& str, bool &isOk);
@@ -158,5 +185,28 @@ class QComboBox;
 void saveComboHistory(QComboBox* cb,const QString& text);
 
 QColor alphaBlend(const QColor &lower, const QColor &upper);
+
+QStringList getExecutableSearchPaths();
+
+QStringList platformCommandForTerminalArgsPreview();
+
+QString appArch();
+QString osArch();
+
+QString byteArrayToString(const QByteArray &content, bool isUTF8);
+QByteArray stringToByteArray(const QString& content, bool isUTF8);
+
+#ifdef _MSC_VER
+#define __builtin_unreachable() (__assume(0))
+#endif
+
+std::tuple<QString, QStringList, PNonExclusiveTemporaryFileOwner> wrapCommandForTerminalEmulator(const QString &terminal, const QStringList &argsPattern, const QStringList &payloadArgsWithArgv0);
+
+std::tuple<QString, QStringList, PNonExclusiveTemporaryFileOwner> wrapCommandForTerminalEmulator(const QString &terminal, const QString &argsPattern, const QStringList &payloadArgsWithArgv0);
+
+struct ExternalResource {
+    ExternalResource();
+    ~ExternalResource();
+};
 
 #endif // UTILS_H

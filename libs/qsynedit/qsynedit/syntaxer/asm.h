@@ -44,7 +44,7 @@ class ASMSyntaxer : public Syntaxer
     };
 
 public:
-    explicit ASMSyntaxer(bool isATT=false);
+    explicit ASMSyntaxer(bool isATT=false, bool isCppMixed=false);
     ASMSyntaxer(const ASMSyntaxer&)=delete;
     ASMSyntaxer& operator=(const ASMSyntaxer&)=delete;
 
@@ -60,7 +60,7 @@ public:
     static const QSet<QString> Directives;
     static const QSet<QString> ATTDirectives;
 private:
-    QChar* mLine;
+    const QChar* mLine;
     QString mLineString;
     int mLineNumber;
     int mRun;
@@ -74,6 +74,7 @@ private:
     PTokenAttribute mRegisterAttribute;
     PTokenAttribute mLabelAttribute;
     bool mATT;
+    bool mCppMixed;
     QSet<QString> mKeywordsCache;
 
 private:
@@ -91,7 +92,7 @@ private:
     void StringProc();
     void SymbolProc();
     void UnknownProc();
-    bool isIdentStartChar(const QChar& ch);
+    bool isIdentStartChar(const QChar& ch) const override;
     static void initData();
 
     // SynHighlighter interface
@@ -106,24 +107,18 @@ public:
     void next() override;
     void setLine(const QString &newLine, int lineNumber) override;
 
-    // SynHighlighter interface
-public:
-    bool getTokenFinished() const override;
-    bool isLastLineCommentNotFinished(int state) const override;
-    bool isLastLineStringNotFinished(int state) const override;
+    bool isCommentNotFinished(int state) const override;
+    bool isStringNotFinished(int state) const override;
     SyntaxState getState() const override;
     void setState(const SyntaxState& rangeState) override;
     void resetState() override;
 
-
-public:
+    bool supportFolding() override;
+    bool needsLineState() override;
     QSet<QString> keywords() override;
 
     bool isATT() const;
     void setATT(bool newATT);
-
-    // Syntaxer interface
-public:
     QString commentSymbol() override;
     QString blockCommentBeginSymbol() override;
     QString blockCommentEndSymbol() override;
@@ -131,4 +126,4 @@ public:
 
 }
 
-#endif // SYNEDITASMHIGHLIGHTER_H
+#endif // QSYNEDIT_ASM_SYNTAXER_H

@@ -44,15 +44,18 @@ void SettingsWidget::init()
     connect(pIconsManager,&IconsManager::actionIconsUpdated,
             this, &SettingsWidget::onUpdateIcons);
     onUpdateIcons();
-    load();
-    connectInputs();
+    //load();
+    clearSettingsChanged();
 }
 
 void SettingsWidget::load()
 {
     try {
+        disconnectInputs();
         doLoad();
         clearSettingsChanged();
+        connectInputs();
+        onLoaded();
     } catch (FileError & e) {
         QMessageBox::warning(nullptr,
                          tr("Load Error"),
@@ -131,7 +134,6 @@ void SettingsWidget::connectInputs()
     for (QGroupBox* p: findChildren<QGroupBox*>()) {
         connect(p, &QGroupBox::toggled,this, &SettingsWidget::setSettingsChanged);
     }
-
 }
 
 void SettingsWidget::disconnectInputs()
@@ -201,7 +203,18 @@ void SettingsWidget::clearSettingsChanged()
     emit settingsChanged(false);
 }
 
+void SettingsWidget::showEvent(QShowEvent *event)
+{
+    Q_UNUSED(event);
+    load();
+}
+
 void SettingsWidget::onUpdateIcons()
 {
     updateIcons(pIconsManager->actionIconSize());
+}
+
+void SettingsWidget::onLoaded()
+{
+
 }

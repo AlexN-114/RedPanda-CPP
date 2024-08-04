@@ -13,9 +13,13 @@ contains(QMAKE_HOST.arch, x86_64):{
     }
 }
 
+win32: CONFIG += lrelease_dosdevice
+else: CONFIG += lrelease
+CONFIG += embed_translations
+QMAKE_RESOURCE_FLAGS += -name $(QMAKE_TARGET)_${QMAKE_FILE_BASE}
 
 win32: {
-DEFINES += _WIN32_WINNT=0x0601
+    DEFINES += _WIN32_WINNT=0x0501
 }
 
 gcc {
@@ -50,6 +54,7 @@ SOURCES += qsynedit/codefolding.cpp \
     qsynedit/syntaxer/lua.cpp \
     qsynedit/types.cpp \
     qsynedit/syntaxer/makefile.cpp \
+    qsynedit/syntaxer/textfile.cpp \
     qsynedit/syntaxer/syntaxer.cpp
 
 HEADERS += \
@@ -76,6 +81,7 @@ HEADERS += \
     qsynedit/syntaxer/glsl.h \
     qsynedit/syntaxer/lua.h \
     qsynedit/syntaxer/makefile.h \
+    qsynedit/syntaxer/textfile.h \
     qsynedit/syntaxer/syntaxer.h
 
 INCLUDEPATH += ../redpanda_qt_utils

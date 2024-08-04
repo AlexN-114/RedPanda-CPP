@@ -22,34 +22,58 @@
 #include <QDebug>
 
 AboutDialog::AboutDialog(QWidget *parent) :
-    QDialog(parent),
-    ui(new Ui::AboutDialog)
+    QDialog{parent},
+    ui{new Ui::AboutDialog}
 {
     setWindowFlag(Qt::WindowContextHelpButtonHint,false);
     ui->setupUi(this);
     ui->lblTitle->setText(ui->lblTitle->text() + tr("Version: ") + REDPANDA_CPP_VERSION);
 
-#ifdef  __GNUC__
+#if defined(__clang__) // Clang always pretends to be GCC/MSVC. Check it first.
+# if defined(_MSC_VER)
+    QString templ = "Clang %1.%2.%3 %4 MSVC ABI";
+# elif defined(__apple_build_version__)
+    QString templ = "Apple Clang %1.%2.%3 %4";
+# else
+    QString templ = "Clang %1.%2.%3 %4";
+# endif
+    ui->lblQt->setText(ui->lblQt->text()
+                       .arg(qVersion())
+                       .arg(templ
+                            .arg(__clang_major__)
+                            .arg(__clang_minor__)
+                            .arg(__clang_patchlevel__)
+                            .arg(appArch()))
+                       .arg(osArch()));
+#elif defined(__GNUC__)
     ui->lblQt->setText(ui->lblQt->text()
             .arg(qVersion())
-            .arg(QString("GCC %1.%2")
+            .arg(QString("GCC %1.%2.%3 %4")
                  .arg(__GNUC__)
-                 .arg(__GNUC_MINOR__)));
+                 .arg(__GNUC_MINOR__)
+                 .arg(__GNUC_PATCHLEVEL__)
+                 .arg(appArch()))
+            .arg(osArch()));
 #elif defined(_MSC_VER)
     ui->lblQt->setText(ui->lblQt->text()
             .arg(qVersion())
-            .arg(tr("Microsoft Visual C++")));
+            .arg(QStringLiteral("MSVC %1.%2 %3")
+                .arg(_MSC_VER / 100)
+                .arg(_MSC_VER % 100)
+                .arg(appArch()))
+            .arg(osArch()));
 #else
     ui->lblQt->setText(ui->lblQt->text()
             .arg(qVersion())
-            .arg(tr("Non-GCC Compiler")));
+            .arg(tr("unknown compiler"))
+            .arg(osArch()));
 #endif
     ui->lblCompileTime->setText(ui->lblCompileTime->text()
                                 .arg(__DATE__, __TIME__));
 
     QString website="https://sourceforge.net/projects/redpanda-cpp/";
     if (pSettings->environment().language()=="zh_CN") {
-        website = "https://royqh1979.gitee.io/redpandacpp/";
+        website = "http://royqh.net/redpandacpp/";
     }
     ui->lblHomepage->setText(tr("Website: <a href=\"%1\">%1</a>").arg(website));
 }

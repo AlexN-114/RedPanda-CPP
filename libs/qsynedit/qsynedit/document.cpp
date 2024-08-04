@@ -22,30 +22,30 @@
 #include <QTextStream>
 #include <QMutexLocker>
 #include <stdexcept>
-#include "qsynedit.h"
 #include <QMessageBox>
 #include <cmath>
 #include "qt_utils/charsetinfo.h"
+#include <QDateTime>
 #include <QDebug>
 
 namespace QSynedit {
 
-Document::Document(const QFont& font, const QFont& nonAsciiFont, QObject *parent):
-      QObject(parent),
-      mFontMetrics(font),
-      mNonAsciiFontMetrics(nonAsciiFont),
-      mTabWidth(4),
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-      mMutex()
-#else
-      mMutex(QMutex::Recursive)
-#endif
+Document::Document(const QFont& font, QObject *parent):
+    QObject{parent},
+    mSetLineWidthLockCount{0},
+    mMaxLineChangedInSetLinesWidth{false},
+    mMutex{},
+    mGlyphCalculator{font}
 {
     mAppendNewLineAtEOF = true;
     mNewlineType = NewlineType::Windows;
     mIndexOfLongestLine = -1;
     mUpdateCount = 0;
-    mCharWidth =  mFontMetrics.horizontalAdvance("M");
+    mUpdateDocumentLineWidthFunc = std::bind(&GlyphCalculator::calcLineWidth,
+        &mGlyphCalculator,
+        std::placeholders::_1,
+        std::placeholders::_2,
+        std::placeholders::_3);
 }
 
 static void listIndexOutOfBounds(int index) {
@@ -54,68 +54,80 @@ static void listIndexOutOfBounds(int index) {
 
 
 
-int Document::parenthesisLevel(int index)
+int Document::parenthesisLevel(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        return mLines[index]->syntaxState.parenthesisLevel;
+    if (line>=0 && line < mLines.size()) {
+        return mLines[line]->syntaxState().parenthesisLevel;
     } else
         return 0;
 }
 
-int Document::bracketLevel(int index)
+int Document::bracketLevel(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        return mLines[index]->syntaxState.bracketLevel;
+    if (line>=0 && line < mLines.size()) {
+        return mLines[line]->syntaxState().bracketLevel;
     } else
         return 0;
 }
 
-int Document::braceLevel(int index)
+int Document::braceLevel(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        return mLines[index]->syntaxState.braceLevel;
+    if (line>=0 && line < mLines.size()) {
+        return mLines[line]->syntaxState().braceLevel;
     } else
         return 0;
 }
 
-int Document::lineColumns(int index)
+int Document::lineWidth(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        if (mLines[index]->columns == -1) {
-            return calculateLineColumns(index);
-        } else
-            return mLines[index]->columns;
+    if (line>=0 && line < mLines.size()) {
+        int width = mLines[line]->width();
+        //updateLongestLineWidth(width);
+        return width;
     } else
         return 0;
 }
 
-int Document::blockLevel(int index)
+int Document::lineWidth(int line, const QString &newText) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        return mLines[index]->syntaxState.blockLevel;
+    if (line<0 || line >= mLines.size())
+        return 0;
+    QString lineText = mLines[line]->lineText();
+    if (lineText==newText) {
+        return mLines[line]->width();
+    } else {
+        return mGlyphCalculator.stringWidth(newText,0);
+    }
+}
+
+int Document::blockLevel(int line) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line>=0 && line < mLines.size()) {
+        return mLines[line]->syntaxState().blockLevel;
     } else
         return 0;
 }
 
-int Document::blockStarted(int index)
+int Document::blockStarted(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        return mLines[index]->syntaxState.blockStarted;
+    if (line>=0 && line < mLines.size()) {
+        return mLines[line]->syntaxState().blockStarted;
     } else
         return 0;
 }
 
-int Document::blockEnded(int index)
+int Document::blockEnded(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        int result = mLines[index]->syntaxState.blockEnded;
+    if (line>=0 && line < mLines.size()) {
+        int result = mLines[line]->syntaxState().blockEnded;
 //        if (index+1 < mLines.size())
 //            result += mLines[index+1]->syntaxState.blockEndedLastLine;
         return result;
@@ -123,25 +135,14 @@ int Document::blockEnded(int index)
         return 0;
 }
 
-int Document::lengthOfLongestLine() {
+int Document::maxLineWidth() const {
     QMutexLocker locker(&mMutex);
-    if (mIndexOfLongestLine < 0) {
-        int MaxLen = -1;
-        mIndexOfLongestLine = -1;
-        if (mLines.count() > 0 ) {
-            for (int i=0;i<mLines.size();i++) {
-                int len = lineColumns(i);
-                if (len > MaxLen) {
-                    MaxLen = len;
-                    mIndexOfLongestLine = i;
-                }
-            }
-        }
-    }
-    if (mIndexOfLongestLine >= 0)
-        return mLines[mIndexOfLongestLine]->columns;
-    else
+    if (mIndexOfLongestLine >= 0) {
+        return mLines[mIndexOfLongestLine]->width();
+    } else if (mLines.isEmpty()) {
         return 0;
+    } else
+        return -1;
 }
 
 QString Document::lineBreak() const
@@ -157,38 +158,38 @@ QString Document::lineBreak() const
     return "\n";
 }
 
-SyntaxState Document::getSyntaxState(int index)
+SyntaxState Document::getSyntaxState(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (index>=0 && index < mLines.size()) {
-        return mLines[index]->syntaxState;
+    if (line>=0 && line < mLines.size()) {
+        return mLines[line]->syntaxState();
     } else {
-         listIndexOutOfBounds(index);
+         listIndexOutOfBounds(line);
     }
     return SyntaxState();
 }
 
-void Document::insertItem(int Index, const QString &s)
+void Document::insertItem(int line, const QString &s)
 {
     beginUpdate();
-    PDocumentLine line = std::make_shared<DocumentLine>();
-    line->lineText = s;
+    PDocumentLine documentLine = std::make_shared<DocumentLine>(
+                mUpdateDocumentLineWidthFunc);
+    documentLine->setLineText(s);
+    mLines.insert(line,documentLine);
     mIndexOfLongestLine = -1;
-    mLines.insert(Index,line);
     endUpdate();
 }
 
 void Document::addItem(const QString &s)
 {
     beginUpdate();
-    PDocumentLine line = std::make_shared<DocumentLine>();
-    line->lineText = s;
-    mIndexOfLongestLine = -1;
+    PDocumentLine line = std::make_shared<DocumentLine>(mUpdateDocumentLineWidthFunc);
+    line->setLineText(s);
     mLines.append(line);
     endUpdate();
 }
 
-bool Document::getAppendNewLineAtEOF()
+bool Document::getAppendNewLineAtEOF() const
 {
     QMutexLocker locker(&mMutex);
     return mAppendNewLineAtEOF;
@@ -200,33 +201,49 @@ void Document::setAppendNewLineAtEOF(bool appendNewLineAtEOF)
     mAppendNewLineAtEOF = appendNewLineAtEOF;
 }
 
-void Document::setSyntaxState(int Index, const SyntaxState& range)
+void Document::setSyntaxState(int line, const SyntaxState& state)
 {
     QMutexLocker locker(&mMutex);
-    if (Index<0 || Index>=mLines.count()) {
-        listIndexOutOfBounds(Index);
+    if (line<0 || line>=mLines.count()) {
+        listIndexOutOfBounds(line);
     }
-    //beginUpdate();
-    mLines[Index]->syntaxState = range;
-    //endUpdate();
+    mLines[line]->setSyntaxState(state);
 }
 
-QString Document::getLine(int Index)
+QString Document::getLine(int line) const
 {
     QMutexLocker locker(&mMutex);
-    if (Index<0 || Index>=mLines.count()) {
+    if (line<0 || line>=mLines.count()) {
         return QString();
     }
-    return mLines[Index]->lineText;
+    return mLines[line]->lineText();
 }
 
-int Document::count()
+int Document::getLineGlyphsCount(int line) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=mLines.count()) {
+        return 0;
+    }
+    return mLines[line]->glyphsCount();
+}
+
+// QList<int> Document::getGlyphPositions(int index)
+// {
+//     QMutexLocker locker(&mMutex);
+//     if (index<0 || index>=mLines.count()) {
+//         return QList<int>{};
+//     }
+//     return mLines[index]->glyphStartCharList();
+// }
+
+int Document::count() const
 {
     QMutexLocker locker(&mMutex);
     return mLines.count();
 }
 
-QString Document::text()
+QString Document::text() const
 {
     QMutexLocker locker(&mMutex);
     return getTextStr();
@@ -247,23 +264,23 @@ void Document::setContents(const QStringList &text)
     });
     internalClear();
     if (text.count() > 0) {
-        mIndexOfLongestLine = -1;
         int FirstAdded = mLines.count();
 
         foreach (const QString& s,text) {
             addItem(s);
         }
+        mIndexOfLongestLine = -1;
         emit inserted(FirstAdded,text.count());
     }
 }
 
-QStringList Document::contents()
+QStringList Document::contents() const
 {
     QMutexLocker locker(&mMutex);
     QStringList result;
     DocumentLines list = mLines;
     foreach (const PDocumentLine& line, list) {
-        result.append(line->lineText);
+        result.append(line->lineText());
     }
     return result;
 }
@@ -272,6 +289,7 @@ void Document::beginUpdate()
 {
     if (mUpdateCount == 0) {
         setUpdateState(true);
+        beginSetLinesWidth();
     }
     mUpdateCount++;
 }
@@ -281,6 +299,7 @@ void Document::endUpdate()
     mUpdateCount--;
     if (mUpdateCount == 0) {
         setUpdateState(false);
+        endSetLinesWidth();
     }
 }
 
@@ -300,26 +319,25 @@ void Document::addLines(const QStringList &strings)
 {
     QMutexLocker locker(&mMutex);
     if (strings.count() > 0) {
-        mIndexOfLongestLine = -1;
         beginUpdate();
         auto action = finally([this]{
             endUpdate();
         });
         int FirstAdded = mLines.count();
-
         for (const QString& s:strings) {
             addItem(s);
         }
+        mIndexOfLongestLine = -1;
         emit inserted(FirstAdded,strings.count());
     }
 }
 
-int Document::getTextLength()
+int Document::getTextLength() const
 {
     QMutexLocker locker(&mMutex);
     int Result = 0;
     foreach (const PDocumentLine& line, mLines ) {
-        Result += line->lineText.length();
+        Result += line->glyphsCount();
         if (mNewlineType == NewlineType::Windows) {
             Result += 2;
         } else {
@@ -417,11 +435,11 @@ QString Document::getTextStr() const
     QString result;
     for (int i=0;i<mLines.count()-1;i++) {
         const PDocumentLine& line = mLines[i];
-        result.append(line->lineText);
+        result.append(line->lineText());
         result.append(lineBreak());
     }
     if (mLines.length()>0) {
-        result.append(mLines.back()->lineText);
+        result.append(mLines.back()->lineText());
     }
     return result;
 }
@@ -435,17 +453,13 @@ void Document::putLine(int index, const QString &s, bool notify) {
             listIndexOutOfBounds(index);
         }
         beginUpdate();
-        int oldColumns = mLines[index]->columns;
-        mLines[index]->lineText = s;
-        calculateLineColumns(index);
-        if (mIndexOfLongestLine == index && oldColumns>mLines[index]->columns )
+        mLines[index]->setLineText(s);
+        if (mIndexOfLongestLine == index) {
+            // width is invalidated, so we must recalculate longest line
             mIndexOfLongestLine = -1;
-        else if (mIndexOfLongestLine>=0
-                 && mIndexOfLongestLine<mLines.count()
-                 && mLines[index]->columns > mLines[mIndexOfLongestLine]->columns)
-            mIndexOfLongestLine = index;
+        }
         if (notify)
-            emit putted(index,1);
+            emit putted(index);
         endUpdate();
     }
 }
@@ -456,14 +470,6 @@ void Document::setUpdateState(bool Updating)
         emit changing();
     else
         emit changed();
-}
-
-int Document::calculateLineColumns(int Index)
-{
-    PDocumentLine line = mLines[Index];
-
-    line->columns = stringColumns(line->lineText,0);
-    return line->columns;
 }
 
 void Document::insertLines(int index, int numLines)
@@ -478,13 +484,13 @@ void Document::insertLines(int index, int numLines)
     auto action = finally([this]{
         endUpdate();
     });
-    mIndexOfLongestLine = -1;
     PDocumentLine line;
     mLines.insert(index,numLines,line);
     for (int i=index;i<index+numLines;i++) {
-        line = std::make_shared<DocumentLine>();
+        line = std::make_shared<DocumentLine>(mUpdateDocumentLineWidthFunc);
         mLines[i]=line;
     }
+    mIndexOfLongestLine = -1;
     emit inserted(index,numLines);
 }
 
@@ -562,24 +568,20 @@ void Document::saveUTF32File(QFile &file, QTextCodec* codec)
     file.write(codec->fromUnicode(text));
 }
 
-const QFontMetrics &Document::fontMetrics() const
+void Document::setTabSize(int newTabSize)
 {
-    return mFontMetrics;
-}
-
-void Document::setFontMetrics(const QFont &newFont, const QFont& newNonAsciiFont)
-{
-    mFontMetrics = QFontMetrics(newFont);
-    mCharWidth =  mFontMetrics.horizontalAdvance("M");
-    mNonAsciiFontMetrics = QFontMetrics(newNonAsciiFont);
-}
-
-void Document::setTabWidth(int newTabWidth)
-{
-    if (mTabWidth!=newTabWidth) {
-        mTabWidth = newTabWidth;
-        resetColumns();
+    if (tabSize()!=newTabSize) {
+        mGlyphCalculator.setTabSize(newTabSize);
+        invalidateAllLineWidth();
     }
+}
+
+void Document::setForceMonospace(bool newForceMonospace)
+{
+    int oldValue = forceMonospace();
+    mGlyphCalculator.setForceMonospace(newForceMonospace);
+    if (oldValue != newForceMonospace)
+        invalidateAllLineWidth();
 }
 
 void Document::loadFromFile(const QString& filename, const QByteArray& encoding, QByteArray& realEncoding)
@@ -595,7 +597,6 @@ void Document::loadFromFile(const QString& filename, const QByteArray& encoding,
             emit inserted(0,mLines.count());
         endUpdate();
     });
-    mIndexOfLongestLine = -1;
     //test for utf8 / utf 8 bom
     if (encoding == ENCODING_AUTO_DETECT) {
         if (file.atEnd()) {
@@ -646,7 +647,7 @@ void Document::loadFromFile(const QString& filename, const QByteArray& encoding,
                 line.remove(line.length()-1,1);
             }
             if (isBinaryContent(line))
-                throw BinaryFileError(tr("This is a binaray File!"));
+                throw BinaryFileError(tr("'%1' is a binaray File!").arg(filename));
             if (allAscii) {
                 allAscii = isTextAllAscii(line);
             }
@@ -770,7 +771,7 @@ void Document::saveToFile(QFile &file, const QByteArray& encoding,
     bool allAscii = true;
     QByteArray data;
     for (PDocumentLine& line:mLines) {
-        QString text = line->lineText+lineBreak();
+        QString text = line->lineText()+lineBreak();
         data = codec->fromUnicode(text);
         if (allAscii) {
             allAscii = (data==text.toLatin1());
@@ -789,34 +790,301 @@ void Document::saveToFile(QFile &file, const QByteArray& encoding,
     }
 }
 
-int Document::stringColumns(const QString &line, int colsBefore) const
+QString Document::glyph(int line, int glyphIdx) const
 {
-    int columns = std::max(0,colsBefore);
-    int charCols;
-    for (int i=0;i<line.length();i++) {
-        QChar ch = line[i];
-        if (ch == '\t') {
-            charCols = mTabWidth - columns % mTabWidth;
-        } else {
-            charCols = charColumns(ch);
-        }
-        columns+=charCols;
-    }
-    return columns-colsBefore;
+    QMutexLocker locker(&mMutex);
+    return mLines[line]->glyph(glyphIdx);
 }
 
-int Document::charColumns(QChar ch) const
+QString Document::glyphAt(int line, int charPos) const
 {
-    if (ch.unicode()<=32)
-        return 1;
-    int width;
-    if (ch.unicode()<0xFF)
-        width = mFontMetrics.horizontalAdvance(ch);
-    else
-        width = mNonAsciiFontMetrics.horizontalAdvance(ch);
-    //return std::ceil((int)(fontMetrics().horizontalAdvance(ch) * dpiFactor()) / (double)mCharWidth);
-    return std::ceil(width / (double)mCharWidth);
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return QString();
+    QList<int> glyphStartCharList = mLines[line]->glyphStartCharList();
+    int glyphIdx = charToGlyphIndex(mLines[line]->lineText(), glyphStartCharList, charPos);
+    return mLines[line]->glyph(glyphIdx);
 }
+
+int Document::charToGlyphStartChar(int line, int charPos) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    QList<int> glyphStartCharList = mLines[line]->glyphStartCharList();
+    int glyphIdx = charToGlyphIndex(mLines[line]->lineText(), glyphStartCharList, charPos);
+    return mLines[line]->glyphStartChar(glyphIdx);
+}
+
+// int Document::columnToGlyphStartColumn(int line, int charPos)
+// {
+//     QMutexLocker locker(&mMutex);
+//     QList<int> glyphColumnsList = mLines[line]->glyphColumnsList();
+//     int glyphIdx = columnToGlyphIndex(glyphColumnsList, charPos);
+//     return mLines[line]->glyphStartColumn(glyphIdx);
+// }
+
+QList<int> calcGlyphStartCharList(const QString &text)
+{
+    QList<int> glyphStartCharList;
+    //parse mGlyphs
+    int i=0;
+    bool consecutive = false;
+    while (i<text.length()) {
+        QChar ch = text[i];
+        if (ch.isHighSurrogate() && i+1<text.length() && QChar::isLowSurrogate(text[i+1].unicode())) {
+            //character that larger than 0xffff
+            uint ucs4 = QChar::surrogateToUcs4(ch, text[i+1]);
+            if (QChar::combiningClass(ucs4)!=0 && !glyphStartCharList.isEmpty()) {
+                //a Combining character
+            } else if (ucs4>=0xE0100 && ucs4 <= 0xE01EF) {
+                //variation selector
+            } else if (ucs4>=0x1F3FB && ucs4 <= 0x1F3FF) {
+                //Emoji modifiers for skin tone
+            } else if (!consecutive) {
+                glyphStartCharList.append(i);
+                if (ucs4>=0x1F1E6 && ucs4<=0x1F1FF) // National Flags emoji
+                    consecutive = true;
+                else
+                    consecutive = false;
+            } else {
+                consecutive = false;
+            }
+            i+=2;
+            continue;
+        } else if (ch.unicode() == 0x200D || ch.unicode() == 0x200C ) {
+            //ZWJ && ZWNJ
+            consecutive = true;
+        } else if (ch.combiningClass()!=0 && !glyphStartCharList.isEmpty()) {
+            //a Combining character
+        } else if (ch.unicode()>=0xFE00 && ch.unicode()<=0xFE0F) {
+            //variation selector
+        } else {
+            //qDebug("%x %d", ch.unicode(), ch.combiningClass());
+            if (!consecutive)
+                glyphStartCharList.append(i);
+            consecutive = false;
+        }
+        i++;
+    }
+    //qDebug()<<text<<glyphStartCharList;
+    // if (text=="...}")
+    //     qDebug()<<"where it comes?";
+    return glyphStartCharList;
+}
+
+int GlyphCalculator::stringWidth(const QString &str, int left) const
+{
+    QList<int> glyphStartCharList = calcGlyphStartCharList(str);
+    int right;
+    calcGlyphPositionList(str, glyphStartCharList, left, right);
+    return right - left;
+}
+
+int GlyphCalculator::stringWidth(const QString &str, int left, const QFontMetrics &fontMetrics)
+{
+    QList<int> glyphStartCharList = calcGlyphStartCharList(str);
+    int right;
+    calcGlyphPositionList(str, glyphStartCharList, fontMetrics, left, right);
+    return right - left;
+}
+
+int Document::glyphCount(int line) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    return mLines[line]->glyphsCount();
+}
+
+int Document::glyphStartChar(int line, int glyphIdx) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    return mLines[line]->glyphStartChar(glyphIdx);
+}
+
+int Document::glyphLength(int line, int glyphIdx) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    return mLines[line]->glyphLength(glyphIdx);
+}
+
+int Document::glyphStartPostion(int line, int glyphIdx) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    return mLines[line]->glyphStartPosition(glyphIdx);
+}
+
+int Document::glyphWidth(int line, int glyphIdx) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    return mLines[line]->glyphWidth(glyphIdx);
+}
+
+int Document::charToGlyphIndex(int line, int charIdx) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    QList<int> glyphStartCharList = mLines[line]->glyphStartCharList();
+    return charToGlyphIndex(mLines[line]->lineText(), glyphStartCharList, charIdx);
+}
+
+int Document::charToGlyphIndex(const QString& str, QList<int> glyphStartCharList, int charIdx) const
+{
+    Q_ASSERT(charIdx>=0);
+    return searchForSegmentIdx(glyphStartCharList, 0, str.length(), charIdx);
+    // if (charIdx>=str.length())
+    //     return glyphStartCharList.length();
+    // for (int i=0;i<glyphStartCharList.length();i++) {
+    //     if (glyphStartCharList[i]>charIdx) {
+    //         Q_ASSERT(i-1>=0);
+    //         return i-1;
+    //     }
+    // }
+    // Q_ASSERT(glyphStartCharList.length()-1>=0);
+    // return glyphStartCharList.length()-1;
+}
+
+QList<int> GlyphCalculator::calcGlyphPositionList(const QString &lineText, const QList<int> &glyphStartCharList, const QFontMetrics &fontMetrics, int left, int &right) const
+{
+    right = std::max(0,left);
+    int start,end;
+    QList<int> glyphPostionList;
+    for (int i=0;i<glyphStartCharList.length();i++) {
+        start = glyphStartCharList[i];
+        if (i+1<glyphStartCharList.length()) {
+            end = glyphStartCharList[i+1];
+        } else {
+            end = lineText.length();
+        }
+        QString glyph = lineText.mid(start,end-start);
+        int gWidth = glyphWidth(glyph, right, fontMetrics, mForceMonospace);
+        glyphPostionList.append(right);
+        right += gWidth;
+    }
+    return glyphPostionList;
+}
+
+int Document::xposToGlyphIndex(int line, int xpos) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    QList<int> glyphPositionList = mLines[line]->glyphStartPositionList();
+    return xposToGlyphIndex(mLines[line]->width(), glyphPositionList, xpos);
+}
+
+int Document::xposToGlyphIndex(int strWidth, QList<int> glyphPositionList, int xpos) const
+{
+    return searchForSegmentIdx(glyphPositionList,0,strWidth,xpos);
+    // if (xpos>=strWidth)
+    //     return glyphPositionList.length();
+    // for (int i=0;i<glyphPositionList.length();i++) {
+    //     if (glyphPositionList[i]>xpos) {
+    //         return i-1;
+    //     }
+    // }
+    // return glyphPositionList.length()-1;
+}
+
+int Document::charToGlyphStartPosition(int line, int charPos) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    QList<int> glyphStartCharList = mLines[line]->glyphStartCharList();
+    int glyphIdx = charToGlyphIndex(mLines[line]->lineText(), glyphStartCharList, charPos);
+    return mLines[line]->glyphStartPosition(glyphIdx);
+}
+
+int Document::xposToGlyphStartChar(int line, int xpos) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    QList<int> glyphPositionList = mLines[line]->glyphStartPositionList();
+    int glyphIdx = xposToGlyphIndex(mLines[line]->width(), glyphPositionList, xpos);
+    return mLines[line]->glyphStartChar(glyphIdx);
+}
+
+int Document::charToGlyphStartPosition(int line, const QString newStr, int charPos) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line>=0 && line<count() && mLines[line]->lineText() == newStr) {
+        return charToGlyphStartPosition(line,charPos);
+    } else {
+        QList<int> glyphStartCharList = calcGlyphStartCharList(newStr);
+        int glyphIdx = charToGlyphIndex(newStr, glyphStartCharList, charPos);
+        int width;
+        QList<int> glyphStartPositionList = mGlyphCalculator.calcGlyphPositionList(newStr, width);
+        if (glyphIdx<glyphStartCharList.length())
+            return glyphStartPositionList[glyphIdx];
+        else
+            return width;
+    }
+}
+
+int Document::xposToGlyphStartChar(int line, const QString newStr, int xpos) const
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return 0;
+    QList<int> glyphPositionList;
+    int width;
+    if (mLines[line]->lineText() == newStr) {
+        glyphPositionList = mLines[line]->glyphStartPositionList();
+        width = mLines[line]->width();
+    } else {
+        glyphPositionList = mGlyphCalculator.calcGlyphPositionList(mLines[line]->lineText(), width);
+    }
+    int glyphIdx = xposToGlyphIndex(width, glyphPositionList, xpos);
+    return mLines[line]->glyphStartChar(glyphIdx);
+}
+
+// int Document::charToColumn(int line, int charPos)
+// {
+//     QMutexLocker locker(&mMutex);
+//     QList<int> glyphPositions = mLines[line]->glyphPositions();
+
+// }
+
+// int Document::charToColumn(const QString &lineText, int charPos) const
+// {
+//     QMutexLocker locker(&mMutex);
+//     QList<int> glyphPositions = calcGlyphPositions(lineText);
+//     return charToColumn(lineText, glyphPositions, charPos);
+// }
+
+// int Document::charToColumn(const QString &lineText, const QList<int> &glyphPositions, int charPos) const
+// {
+//     Q_ASSERT(charPos<lineText.length() && charPos>=0);
+//     int glyphIdx;
+//     for (glyphIdx=0;glyphIdx<glyphPositions.length();glyphIdx++) {
+//         if (charPos<glyphPositions[glyphIdx])
+//             break;
+//     }
+//     int cols=0;
+// }
+
+// int Document::columnToChar(const QString &lineText, int column) const
+// {
+//     QList<int> glyphPositions = calcGlyphPositions(lineText);
+//     return columnToChar(lineText, glyphPositions, column);
+// }
+
+// int Document::columnToChar(const QString &lineText, const QList<int> &glyphPositions, int column) const
+// {
+
+// }
 
 void Document::putTextStr(const QString &text)
 {
@@ -850,14 +1118,122 @@ void Document::internalClear()
     if (!mLines.isEmpty()) {
         beginUpdate();
         int oldCount = mLines.count();
-        mIndexOfLongestLine = -1;
         mLines.clear();
+        mIndexOfLongestLine = -1;
         emit deleted(0,oldCount);
         endUpdate();
     }
 }
 
-NewlineType Document::getNewlineType()
+bool Document::lineWidthValid(int line)
+{
+    if (line<0 || line>=mLines.count())
+        return false;
+    return mLines[line]->mWidth>=0 && !mLines[line]->mIsTempWidth;
+}
+
+void Document::beginSetLinesWidth()
+{
+    if (mSetLineWidthLockCount == 0) {
+        mMaxLineChangedInSetLinesWidth = false;
+    }
+    mSetLineWidthLockCount++;
+}
+
+void Document::endSetLinesWidth()
+{
+    mSetLineWidthLockCount--;
+    if (mSetLineWidthLockCount == 0) {
+        if (mMaxLineChangedInSetLinesWidth)
+            updateMaxLineWidthAndNotify();
+    }
+}
+
+void Document::setLineWidth(int line, int newWidth, const QList<int> glyphStartPositionList)
+{
+    QMutexLocker locker(&mMutex);
+    if (line<0 || line>=count())
+        return ;
+    int oldWidth = mLines[line]->mWidth;
+    // qDebug()<<line<<oldWidth<<newWidth;
+    mLines[line]->mWidth = newWidth;
+    mLines[line]->mIsTempWidth = false;
+    mLines[line]->mGlyphStartPositionList = glyphStartPositionList;
+    if (mIndexOfLongestLine<0) {
+        mIndexOfLongestLine = line;
+        updateMaxLineWidthChanged();
+    } else if (mIndexOfLongestLine == line) {
+        if (oldWidth > newWidth) {
+            mIndexOfLongestLine = -1;
+            updateMaxLineWidthChanged();
+        } else if (oldWidth < newWidth) {
+            updateMaxLineWidthChanged();
+        }
+    } else if (mLines[mIndexOfLongestLine]->mWidth < newWidth) {
+        mIndexOfLongestLine = line;
+        updateMaxLineWidthChanged();
+    }
+    Q_ASSERT(mLines[line]->mGlyphStartPositionList.length() == mLines[line]->mGlyphStartCharList.length());
+}
+
+void Document::updateMaxLineWidthChanged()
+{
+    if (mSetLineWidthLockCount>0) {
+        mMaxLineChangedInSetLinesWidth = true;
+    } else {
+        //updateMaxLineWidthAndNotify();
+        emit maxLineWidthChanged();
+    }
+}
+
+void Document::updateMaxLineWidthAndNotify()
+{
+    int MaxLen = -1;
+    mIndexOfLongestLine = -1;
+    if (mLines.count() > 0 ) {
+        for (int i=0;i<mLines.size();i++) {
+            int len = mLines[i]->mWidth;
+            if (len > MaxLen) {
+                MaxLen = len;
+                mIndexOfLongestLine = i;
+            }
+        }
+    }
+    if (mIndexOfLongestLine>=0)
+        emit maxLineWidthChanged();
+}
+
+QList<int> GlyphCalculator::calcGlyphPositionList(const QString &lineText, int &width) const
+{
+    QList<int> glyphStartCharList = calcGlyphStartCharList(lineText);
+    return calcGlyphPositionList(lineText,glyphStartCharList,0,width);
+}
+
+QList<int> Document::getGlyphStartCharList(int line, const QString &lineText)
+{
+    if (line<0 || line>=count() || mLines[line]->lineText()!=lineText)
+        return calcGlyphStartCharList(lineText);
+    return mLines[line]->glyphStartCharList();
+}
+
+QList<int> Document::getGlyphStartCharList(int line)
+{
+    if (line<0 || line>=count())
+        return QList<int>();
+    return mLines[line]->glyphStartCharList();
+}
+
+QList<int> Document::getGlyphStartPositionList(int line)
+{
+    return mLines[line]->glyphStartPositionList();
+}
+
+int Document::getLineWidth(int line)
+{
+    return mLines[line]->mWidth;
+}
+
+NewlineType Document::getNewlineType() const
 {
     QMutexLocker locker(&mMutex);
     return mNewlineType;
@@ -869,52 +1245,113 @@ void Document::setNewlineType(const NewlineType &fileEndingType)
     mNewlineType = fileEndingType;
 }
 
-bool Document::empty()
+bool Document::empty() const
 {
     QMutexLocker locker(&mMutex);
     return mLines.count()==0;
 }
 
-void Document::resetColumns()
+void Document::invalidateAllLineWidth()
 {
     QMutexLocker locker(&mMutex);
-    mIndexOfLongestLine = -1;
-    if (mLines.count() > 0 ) {
-        for (int i=0;i<mLines.size();i++) {
-            mLines[i]->columns = -1;
-        }
-    }
-}
-
-void Document::invalidAllLineColumns()
-{
-    QMutexLocker locker(&mMutex);
-    mIndexOfLongestLine = -1;
     for (PDocumentLine& line:mLines) {
-        line->columns = -1;
+        line->invalidateWidth();
+    }
+    mIndexOfLongestLine = -1;
+}
+
+void Document::invalidateAllNonTempLineWidth()
+{
+    QMutexLocker locker(&mMutex);
+    for (PDocumentLine& line:mLines) {
+        if (!line->mIsTempWidth)
+            line->mIsTempWidth;
     }
 }
 
-DocumentLine::DocumentLine():
-    lineText(),
-    syntaxState(),
-    columns(-1)
+DocumentLine::DocumentLine(DocumentLine::UpdateWidthFunc updateWidthFunc):
+    mSyntaxState{},
+    mWidth{-1},
+    mIsTempWidth{true},
+    mUpdateWidthFunc{updateWidthFunc}
 {
 }
 
+int DocumentLine::glyphLength(int i) const
+{
+    return calcSegmentInterval(mGlyphStartCharList, mLineText.length(), i);
+}
+
+QString DocumentLine::glyph(int i) const
+{
+   if (i<0 || i>=mGlyphStartCharList.length())
+       return QString();
+   return mLineText.mid(glyphStartChar(i),glyphLength(i));
+}
+
+int DocumentLine::glyphStartPosition(int i)
+{
+    if (i<0)
+       return 0;
+    if (mWidth<0)
+        updateWidth();
+    if (i>=mGlyphStartPositionList.length())
+       return mWidth;
+    return mGlyphStartPositionList[i];
+}
+
+int DocumentLine::glyphWidth(int i)
+{
+    if (mWidth <0)
+        updateWidth();
+    return calcSegmentInterval(mGlyphStartPositionList, mWidth, i);
+}
+
+int DocumentLine::width()
+{
+    if(mWidth<0)
+        updateWidth();
+    return mWidth;
+}
+
+void DocumentLine::setLineText(const QString &newLineText)
+{
+    mLineText = newLineText;
+    mGlyphStartCharList = calcGlyphStartCharList(newLineText);
+    invalidateWidth();
+}
+
+void DocumentLine::updateWidth()
+{
+    Q_ASSERT(mUpdateWidthFunc!=nullptr);
+    mGlyphStartPositionList = mUpdateWidthFunc(mLineText, mGlyphStartCharList, mWidth);
+//    qDebug()<<"Update Width"<<mLineText<<mWidth<<mGlyphPositionList;
+}
+
+const QList<int> &DocumentLine::glyphStartPositionList()
+{
+    if(mWidth<0)
+        updateWidth();
+    return mGlyphStartPositionList;
+}
+
+int DocumentLine::glyphStartChar(int i) const
+{
+   if (i<0)
+       return 0;
+   if (i>=mGlyphStartCharList.length())
+       return mLineText.length();
+   return mGlyphStartCharList[i];
+}
 
 UndoList::UndoList():QObject()
 {
-    mMaxUndoActions = 1024;
-    mMaxMemoryUsage = 50 * 1024 * 1024;
     mNextChangeNumber = 1;
     mInsideRedo = false;
 
     mBlockChangeNumber=0;
     mBlockLock=0;
     mFullUndoImposible=false;
-    mBlockCount=0;
-    mMemoryUsage=0;
     mLastPoppedItemChangeNumber=0;
     mInitialChangeNumber = 0;
     mLastRestoredItemChangeNumber=0;
@@ -934,14 +1371,9 @@ void UndoList::addChange(ChangeReason reason, const BufferCoord &startPos,
                 reason,
                 selMode,startPos,endPos,changeText,
                 changeNumber);
-//    qDebug()<<"add change"<<changeNumber<<(int)reason;
     mItems.append(newItem);
-    addMemoryUsage(newItem);
-    ensureMaxEntries();
 
     if (reason!=ChangeReason::GroupBreak && !inBlock()) {
-        mBlockCount++;
-//        qDebug()<<"add"<<mBlockCount;
         emit addedUndo();
     }
 }
@@ -958,13 +1390,9 @@ void UndoList::restoreChange(PUndoItem item)
 {
     size_t changeNumber = item->changeNumber();
     mItems.append(item);
-    addMemoryUsage(item);
-    ensureMaxEntries();
     if (changeNumber>mNextChangeNumber)
         mNextChangeNumber=changeNumber;
     if (changeNumber!=mLastRestoredItemChangeNumber) {
-//        qDebug()<<"restore"<<mBlockCount;
-        mBlockCount++;
         emit addedUndo();
     }
     mLastRestoredItemChangeNumber=changeNumber;
@@ -996,9 +1424,7 @@ void UndoList::clear()
     mInitialChangeNumber=0;
     mLastPoppedItemChangeNumber=0;
     mLastRestoredItemChangeNumber=0;
-    mBlockCount=0;
     mBlockLock=0;
-    mMemoryUsage=0;
 }
 
 void UndoList::endBlock()
@@ -1010,8 +1436,6 @@ void UndoList::endBlock()
             size_t iBlockID = mBlockChangeNumber;
             mBlockChangeNumber = 0;
             if (mItems.count() > 0 && peekItem()->changeNumber() == iBlockID) {
-                mBlockCount++;
-//                qDebug()<<"end block"<<mBlockCount;
                 emit addedUndo();
             }
         }
@@ -1026,30 +1450,6 @@ bool UndoList::inBlock()
 unsigned int UndoList::getNextChangeNumber()
 {
     return mNextChangeNumber++;
-}
-
-void UndoList::addMemoryUsage(PUndoItem item)
-{
-    if (!item)
-        return;
-    mMemoryUsage += item->memoryUsage();
-}
-
-void UndoList::reduceMemoryUsage(PUndoItem item)
-{
-    if (!item)
-        return;
-    mMemoryUsage -= item->memoryUsage();
-}
-
-int UndoList::maxMemoryUsage() const
-{
-    return mMaxMemoryUsage;
-}
-
-void UndoList::setMaxMemoryUsage(int newMaxMemoryUsage)
-{
-    mMaxMemoryUsage = newMaxMemoryUsage;
 }
 
 ChangeReason UndoList::lastChangeReason()
@@ -1080,16 +1480,7 @@ PUndoItem UndoList::popItem()
     else {
         PUndoItem item = mItems.last();
 //        qDebug()<<"popped"<<item->changeNumber()<<item->changeText()<<(int)item->changeReason()<<mLastPoppedItemChangeNumber;
-        if (mLastPoppedItemChangeNumber!=item->changeNumber() && item->changeReason()!=ChangeReason::GroupBreak) {
-            mBlockCount--;
-            Q_ASSERT(mBlockCount>=0);
-//            qDebug()<<"pop"<<mBlockCount;
-            if (mBlockCount<0) {
-                mBlockCount=0;
-            }
-        }
         mLastPoppedItemChangeNumber =  item->changeNumber();
-        reduceMemoryUsage(item);
         mItems.removeLast();
         return item;
     }
@@ -1103,19 +1494,6 @@ bool UndoList::canUndo()
 int UndoList::itemCount()
 {
     return mItems.count();
-}
-
-int UndoList::maxUndoActions() const
-{
-    return mMaxUndoActions;
-}
-
-void UndoList::setMaxUndoActions(int maxUndoActions)
-{
-    if (maxUndoActions!=mMaxUndoActions) {
-        mMaxUndoActions = maxUndoActions;
-        ensureMaxEntries();
-    }
 }
 
 bool UndoList::initialState()
@@ -1150,38 +1528,6 @@ bool UndoList::fullUndoImposible() const
     return mFullUndoImposible;
 }
 
-void UndoList::ensureMaxEntries()
-{
-    if (mItems.isEmpty())
-        return;
-//    qDebug()<<QString("-- List Memory: %1 %2").arg(mMemoryUsage).arg(mMaxMemoryUsage);
-    if ((mMaxUndoActions >0 && mBlockCount > mMaxUndoActions)
-         || (mMaxMemoryUsage>0 && mMemoryUsage>mMaxMemoryUsage)){
-        PUndoItem lastItem = mItems.back();
-        mFullUndoImposible = true;
-        while (((mMaxUndoActions >0 && mBlockCount > mMaxUndoActions)
-               || (mMaxMemoryUsage>0 && mMemoryUsage>mMaxMemoryUsage))
-               && !mItems.isEmpty()) {
-            //remove all undo item in block
-            PUndoItem item = mItems.front();
-            size_t changeNumber = item->changeNumber();
-            //we shouldn't drop the newest changes;
-            if (changeNumber == lastItem->changeNumber())
-                break;
-            while (mItems.count()>0) {
-                item = mItems.front();
-                if (item->changeNumber()!=changeNumber)
-                    break;
-                reduceMemoryUsage(item);
-                mItems.removeFirst();
-            }
-            if (item->changeReason()!=ChangeReason::GroupBreak)
-                mBlockCount--;
-      }
-    }
-//    qDebug()<<QString("++ List Memory: %1").arg(mMemoryUsage);
-}
-
 SelectionMode UndoItem::changeSelMode() const
 {
     return mChangeSelMode;
@@ -1207,11 +1553,6 @@ size_t UndoItem::changeNumber() const
     return mChangeNumber;
 }
 
-unsigned int UndoItem::memoryUsage() const
-{
-    return mMemoryUsage;
-}
-
 UndoItem::UndoItem(ChangeReason reason, SelectionMode selMode,
                                  BufferCoord startPos, BufferCoord endPos,
                                  const QStringList& text, int number)
@@ -1226,9 +1567,6 @@ UndoItem::UndoItem(ChangeReason reason, SelectionMode selMode,
     foreach (const QString& s, text) {
         length+=s.length();
     }
-    mMemoryUsage =  length * sizeof(QChar) + text.length() * sizeof(QString)
-            + sizeof(UndoItem);
-//    qDebug()<<mMemoryUsage;
 }
 
 ChangeReason UndoItem::changeReason() const
@@ -1306,6 +1644,122 @@ BinaryFileError::BinaryFileError(const QString& reason):
     FileError(reason)
 {
 
+}
+
+int searchForSegmentIdx(const QList<int> &segList, int minVal, int maxVal, int value)
+{
+    if (value<minVal)
+        return 0;
+    if (value>=maxVal)
+        return segList.length();
+    int start = 0;
+    int end = segList.length()-1;
+    while ( start<=end ) {
+        int mid = (start+end) / 2;
+        if (segList[mid]==value) {
+            //skip zero length segs
+            while(mid+1<segList.length() && segList[mid+1]==value)
+                mid++;
+            return mid;
+        } else if (segList[mid]>value) {
+            end = mid-1;
+        } else if (mid+1>=segList.length() || segList[mid+1]>value ) {
+            return mid;
+        } else {
+            start = mid+1;
+        }
+    }
+    //Not found, should not happen
+    Q_ASSERT(false);
+    return -1;
+}
+
+int GlyphCalculator::updateGlyphStartPositionList(
+        const QString &lineText,
+        const QList<int> &glyphStartCharList, int startChar, int endChar,
+        const QFontMetrics &fontMetrics,
+        QList<int> &glyphStartPositionList, int left, int &right, int &startGlyph, int &endGlyph) const
+{
+    right = std::max(0,left);
+    startGlyph = searchForSegmentIdx(glyphStartCharList,0,lineText.length(),startChar);
+    endGlyph = searchForSegmentIdx(glyphStartCharList,0,lineText.length(),endChar);
+    for (int i=startGlyph;i<endGlyph;i++) {
+        int start = glyphStartCharList[i];
+        int end;
+        if (i+1<glyphStartCharList.length()) {
+            end = glyphStartCharList[i+1];
+        } else {
+            end = lineText.length();
+        }
+        QString glyph = lineText.mid(start,end-start);
+        int gWidth = glyphWidth(glyph, right, fontMetrics, mForceMonospace);
+        glyphStartPositionList[i] = right;
+        right += gWidth;
+    }
+    if (endGlyph<glyphStartPositionList.length())
+        glyphStartPositionList[endGlyph] = right;
+    return right-left;
+}
+
+int GlyphCalculator::glyphWidth(const QString &glyph, int left, const QFontMetrics &fontMetrics, bool forceMonospace) const
+{
+    int glyphWidth;
+    if (glyph.length()==0)
+        return 0;
+    QChar ch = glyph[0];
+    if (ch == '\t') {
+        glyphWidth = tabWidth() - left % tabWidth();
+    } else {
+        glyphWidth = fontMetrics.horizontalAdvance(glyph);
+        //qDebug()<<glyph<<glyphCols<<width<<mCharWidth;
+    }
+    if (forceMonospace) {
+        int cols = std::ceil(glyphWidth / (double)mCharWidth);
+        glyphWidth = cols * mCharWidth;
+    }
+    return glyphWidth;
+}
+
+void expandGlyphStartCharList(const QString &strAdded, int oldStrLen, QList<int> &glyphStartCharList)
+{
+    QList<int> addedList = calcGlyphStartCharList(strAdded);
+    for (int i=0;i<addedList.length();i++) {
+        glyphStartCharList.append(addedList[i]+oldStrLen);
+    }
+}
+
+int calcSegmentInterval(const QList<int> &segList, int maxVal, int idx)
+{
+    if (idx<0 || idx>=segList.length())
+        return 0;
+    if (idx == segList.length()-1)
+        return maxVal - segList[idx];
+    return segList[idx+1]-segList[idx];
+}
+
+int segmentIntervalStart(const QList<int> &segList, int minVal, int maxVal, int idx)
+{
+    if (idx<0)
+        return minVal;
+    if (idx>=segList.length())
+        return maxVal;
+    return segList[idx];
+}
+
+GlyphCalculator::GlyphCalculator(const QFont &font):
+    mFontMetrics{font},
+    mTabSize{4},
+    mForceMonospace{false}
+{
+    mCharWidth =  mFontMetrics.horizontalAdvance("M");
+    mSpaceWidth = mFontMetrics.horizontalAdvance(" ");
+}
+
+void GlyphCalculator::setFont(const QFont &newFont)
+{
+    mFontMetrics = QFontMetrics(newFont);
+    mCharWidth =  mFontMetrics.horizontalAdvance("M");
+    mSpaceWidth = mFontMetrics.horizontalAdvance(" ");
 }
 
 }

@@ -20,12 +20,13 @@
 #include "runner.h"
 #include <QProcess>
 #include <QSemaphore>
+#include <memory>
 
 class ExecutableRunner : public Runner
 {
     Q_OBJECT
 public:
-    ExecutableRunner(const QString& filename, const QString& arguments, const QString& workDir,
+    ExecutableRunner(const QString& filename, const QStringList& arguments, const QString& workDir,
                      QObject* parent = nullptr);
     ExecutableRunner(const ExecutableRunner&)=delete;
     ExecutableRunner& operator=(const ExecutableRunner&)=delete;

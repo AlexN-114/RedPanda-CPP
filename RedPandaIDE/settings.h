@@ -26,6 +26,7 @@
 #include "qsynedit/qsynedit.h"
 #include "compiler/compilerinfo.h"
 #include "utils.h"
+#include "utils/font.h"
 
 /**
  * use the following command to get gcc's default bin/library folders:
@@ -45,6 +46,7 @@
 #define SETTING_CODE_FORMATTER "CodeFormatter"
 #define SETTING_COMPILTER_SETS "CompilerSets"
 #define SETTING_COMPILTER_SETS_DEFAULT_INDEX "defaultIndex"
+#define SETTING_COMPILTER_SETS_DEFAULT_INDEX_TIMESTAMP "defaultIndexTimestamp"
 #define SETTING_COMPILTER_SETS_COUNT "count"
 #define SETTING_COMPILTER_SET "CompilerSet_%1"
 #define SETTING_EDITOR_DEFAULT_ENCODING "default_encoding"
@@ -163,14 +165,10 @@ public:
         bool scrollPastEol() const;
         void setScrollPastEol(bool scrollPastEol);
 
-        bool scrollByOneLess() const;
-        void setScrollByOneLess(bool scrollByOneLess);
-
         bool halfPageScroll() const;
         void setHalfPageScroll(bool halfPageScroll);
 
         QString fontName() const;
-        void setFontName(const QString &fontName);
 
         int fontSize() const;
         void setFontSize(int fontSize);
@@ -213,15 +211,6 @@ public:
 
         int gutterRightOffset() const;
         void setGutterRightOffset(int gutterRightOffset);
-
-        bool copySizeLimit() const;
-        void setCopySizeLimit(bool copyLimit);
-
-        int copyCharLimits() const;
-        void setCopyCharLimits(int copyCharLimits);
-
-        int copyLineLimits() const;
-        void setCopyLineLimits(int copyLineLimits);
 
         bool copyRTFUseBackground() const;
         void setCopyRTFUseBackground(bool copyRTFUseBackground);
@@ -354,20 +343,15 @@ public:
         bool enableLigaturesSupport() const;
         void setEnableLigaturesSupport(bool newEnableLigaturesSupport);
 
-        const QString &nonAsciiFontName() const;
-        void setNonAsciiFontName(const QString &newNonAsciiFontName);
+        QStringList fontFamilies() const;
+        void setFontFamilies(const QStringList &newFontFamilies);
+        QStringList fontFamiliesWithControlFont() const;
 
         int mouseSelectionScrollSpeed() const;
         void setMouseSelectionScrollSpeed(int newMouseSelectionScrollSpeed);
 
         bool autoDetectFileEncoding() const;
         void setAutoDetectFileEncoding(bool newAutoDetectFileEncoding);
-
-        int undoLimit() const;
-        void setUndoLimit(int newUndoLimit);
-
-        int undoMemoryUsage() const;
-        void setUndoMemoryUsage(int newUndoMemoryUsage);
 
         bool autoFormatWhenSaved() const;
         void setAutoFormatWhenSaved(bool newAutoFormatWhenSaved);
@@ -405,6 +389,9 @@ public:
         int tipsDelay() const;
         void setTipsDelay(int newTipsDelay);
 
+        bool forceFixedFontWidth() const;
+        void setForceFixedFontWidth(bool newForceFixedWidth);
+
     private:
         //General
         // indents
@@ -432,7 +419,6 @@ public:
         bool mAutoHideScrollbar;
         bool mScrollPastEof;
         bool mScrollPastEol;
-        bool mScrollByOneLess;
         bool mHalfPageScroll;
         int mMouseWheelScrollSpeed;
         int mMouseSelectionScrollSpeed;
@@ -441,15 +427,14 @@ public:
         bool mShowRightEdgeLine;
         int mRightEdgeWidth;
         QColor mRightEdgeLineColor;
-        bool mEnableLigaturesSupport;
 
         //Font
         //font
-        QString mFontName;
-        QString mNonAsciiFontName;
+        QStringList mFontFamilies;
         int mFontSize;
-        bool mFontOnlyMonospaced;
         double mLineSpacing;
+        bool mEnableLigaturesSupport;
+        bool mForceFixedFontWidth;
 
         bool mShowLeadingSpaces;
         bool mShowTrailingSpaces;
@@ -471,9 +456,6 @@ public:
         bool mGutterFontOnlyMonospaced;
 
         //copy
-        bool mCopySizeLimit;
-        int mCopyCharLimits;
-        int mCopyLineLimits;
         int mCopyWithFormatAs;
         bool mCopyRTFUseBackground;
         bool mCopyRTFUseEditorColor;
@@ -519,8 +501,6 @@ public:
         bool mReadOnlySytemHeader;
         bool mAutoLoadLastFiles;
         bool mDefaultFileCpp;
-        int mUndoLimit;
-        int mUndoMemoryUsage;
         bool mAutoFormatWhenSaved;
         bool mRemoveTrailingSpacesWhenSaved;
         bool mParseTodos;
@@ -546,6 +526,12 @@ public:
 
     class Environment: public _Base {
     public:
+        struct TerminalItem {
+            QString name;
+            QString terminal;
+            QString param;
+        };
+
         explicit Environment(Settings * settings);
         QString theme() const;
         void setTheme(const QString &theme);
@@ -569,17 +555,16 @@ public:
         void setIconSet(const QString &newIconSet);
 
         QString terminalPath() const;
-        QString terminalPathForExec() const;
         void setTerminalPath(const QString &terminalPath);
 
         QString AStylePath() const;
         void setAStylePath(const QString &aStylePath);
 
+        QString terminalArgumentsPattern() const;
+        void setTerminalArgumentsPattern(const QString &argsPattern);
+
         bool useCustomIconSet() const;
         void setUseCustomIconSet(bool newUseCustomIconSet);
-
-        bool useCustomTheme() const;
-        void setUseCustomTheme(bool newUseCustomTheme);
 
         bool hideNonSupportFilesInFileView() const;
         void setHideNonSupportFilesInFileView(bool newHideNonSupportFilesInFileView);
@@ -590,9 +575,23 @@ public:
         double iconZoomFactor() const;
         void setIconZoomFactor(double newIconZoomFactor);
 
-    private:
+        QJsonArray availableTerminals() const;
+        void setAvailableTerminals(const QJsonArray &availableTerminals);
 
-        //Appearence
+        QString queryPredefinedTerminalArgumentsPattern(const QString &executable) const;
+
+        bool useCustomTerminal() const;
+        void setUseCustomTerminal(bool newUseCustomTerminal);
+
+        QList<TerminalItem> loadTerminalList() const;
+
+        static QMap<QString, QString> terminalArgsPatternMagicVariables();
+
+    private:
+        bool isTerminalValid();
+        void checkAndSetTerminal();
+
+        //Appearance
         QString mTheme;
         QString mInterfaceFont;
         int mInterfaceFontSize;
@@ -606,8 +605,12 @@ public:
         QString mDefaultOpenFolder;
         QString mTerminalPath;
         QString mAStylePath;
+        QString mTerminalArgumentsPattern;
+        bool mUseCustomTerminal;
         bool mHideNonSupportFilesInFileView;
         bool mOpenFilesInSingleInstance;
+
+        static const QMap<QString, QString> mTerminalArgsPatternMagicVariables;
         // _Base interface
     protected:
         void doSave() override;
@@ -617,11 +620,11 @@ public:
     class CodeCompletion: public _Base {
     public:
         explicit CodeCompletion(Settings *settings);
-        int width() const;
-        void setWidth(int newWidth);
+        int widthInColumns() const;
+        void setWidthInColumns(int newWidth);
 
-        int height() const;
-        void setHeight(int newHeight);
+        int heightInLines() const;
+        void setHeightInLines(int newHeight);
 
         bool enabled() const;
         void setEnabled(bool newEnabled);
@@ -653,8 +656,8 @@ public:
         bool showCodeIns() const;
         void setShowCodeIns(bool newShowCodeIns);
 
-        bool clearWhenEditorHidden();
-        void setClearWhenEditorHidden(bool newClearWhenEditorHidden);
+        //bool clearWhenEditorHidden();
+        //void setClearWhenEditorHidden(bool newClearWhenEditorHidden);
 
         int minCharRequired() const;
         void setMinCharRequired(int newMinCharRequired);
@@ -669,8 +672,8 @@ public:
         void setShareParser(bool newShareParser);
 
     private:
-        int mWidth;
-        int mHeight;
+        int mWidthInColumns;
+        int mHeightInLines;
         bool mEnabled;
         bool mParseLocalHeaders;
         bool mParseGlobalHeaders;
@@ -684,7 +687,7 @@ public:
         int mMinCharRequired;
         bool mHideSymbolsStartsWithTwoUnderLine;
         bool mHideSymbolsStartsWithUnderLine;
-        bool mClearWhenEditorHidden;
+        //bool mClearWhenEditorHidden;
         bool mShareParser;
 
         // _Base interface
@@ -761,8 +764,6 @@ public:
         void setUnpadParen(bool newUnpadParen);
         bool deleteEmptyLines() const;
         void setDeleteEmptyLines(bool newDeleteEmptyLines);
-        bool deleteMultipleEmptyLines() const;
-        void setDeleteMultipleEmptyLines(bool newDeleteMultipleEmptyLines);
         bool fillEmptyLines() const;
         void setFillEmptyLines(bool newFillEmptyLines);
         int alignPointerStyle() const;
@@ -814,6 +815,15 @@ public:
         bool indentAfterParens() const;
         void setIndentAfterParens(bool newIndentAfterParens);
 
+        bool squeezeLines() const;
+        void setSqueezeLines(bool newSqueezeLines);
+
+        int squeezeLinesNumber() const;
+        void setSqueezeLinesNumber(int newSqueezeLinesNumber);
+
+        bool squeezeWhitespace() const;
+        void setSqueezeWhitespace(bool newSqueezeWhitespace);
+
     private:
         int mBraceStyle;
         int mIndentStyle;
@@ -848,8 +858,10 @@ public:
         bool mPadHeader;
         bool mUnpadParen;
         bool mDeleteEmptyLines;
-        bool mDeleteMultipleEmptyLines;
         bool mFillEmptyLines;
+        bool mSqueezeLines;
+        int mSqueezeLinesNumber;
+        bool mSqueezeWhitespace;
         int mAlignPointerStyle;
         int mAlignReferenceStyle;
         bool mBreakClosingBraces;
@@ -904,9 +916,6 @@ public:
         int competivieCompanionPort() const;
         void setCompetivieCompanionPort(int newCompetivieCompanionPort);
 
-        bool ignoreSpacesWhenValidatingCases() const;
-        void setIgnoreSpacesWhenValidatingCases(bool newIgnoreSpacesWhenValidatingCases);
-
         const QString &caseEditorFontName() const;
         void setCaseEditorFontName(const QString &newCaseEditorFontName);
 
@@ -934,6 +943,11 @@ public:
         bool redirectStderrToToolLog() const;
         void setRedirectStderrToToolLog(bool newRedirectStderrToToolLog);
 
+        ProblemCaseValidateType problemCaseValidateType() const;
+        void setProblemCaseValidateType(ProblemCaseValidateType newProblemCaseValidateType);
+
+        bool enableVirualTerminalSequence() const;
+        void setEnableVirualTerminalSequence(bool newEnableVirualTerminalSequence);
     private:
         // general
         bool mPauseConsole;
@@ -942,6 +956,7 @@ public:
         QString mParams;
         bool mRedirectInput;
         QString mInputFilename;
+        bool mEnableVirualTerminalSequence;
 
         //Problem Set
         bool mEnableProblemSet;
@@ -950,6 +965,7 @@ public:
         bool mConvertHTMLToTextForInput;
         bool mConvertHTMLToTextForExpected;
         bool mIgnoreSpacesWhenValidatingCases;
+        ProblemCaseValidateType mProblemCaseValidateType;
         bool mRedirectStderrToToolLog;
         QString mCaseEditorFontName;
         int mCaseEditorFontSize;
@@ -962,7 +978,7 @@ public:
         void doSave() override;
         void doLoad() override;
     };
-
+#ifdef ENABLE_VCS
     class VCS: public _Base {
     public:
         explicit VCS(Settings *settings);
@@ -979,6 +995,7 @@ public:
         void doSave() override;
         void doLoad() override;
     };
+#endif
 
     class Languages: public _Base {
     public:
@@ -1288,6 +1305,9 @@ public:
         int arrayElements() const;
         void setArrayElements(int newArrayElements);
 
+        int characters() const;
+        void setCharacters(int newCharacters);
+
     private:
         bool mEnableDebugConsole;
         bool mShowDetailLog;
@@ -1306,6 +1326,7 @@ public:
         int mMemoryViewRows;
         int mMemoryViewColumns;
         int mArrayElements;
+        int mCharacters;
 
         // _Base interface
     protected:
@@ -1325,6 +1346,7 @@ public:
         explicit CompilerSet();
         explicit CompilerSet(const QString& compilerFolder, const QString& c_prog);
         explicit CompilerSet(const CompilerSet& set);
+        explicit CompilerSet(const QJsonObject& set);
 
         CompilerSet& operator= (const CompilerSet& ) = delete;
         CompilerSet& operator= (const CompilerSet&& ) = delete;
@@ -1338,14 +1360,15 @@ public:
         void unsetCompileOption(const QString& key);
         void setCompileOptions(const QMap<QString, QString> options);
 
-        QString getCompileOptionValue(const QString& key);
+        QString getCompileOptionValue(const QString& key) const;
 
-        int mainVersion();
+        int mainVersion() const;
+        QString findProgramInBinDirs(const QString name) const;
 
-        bool canCompileC();
-        bool canCompileCPP();
-        bool canMake();
-        bool canDebug();
+        bool canCompileC() const;
+        bool canCompileCPP() const;
+        bool canMake() const;
+        bool canDebug() const;
 //        bool dirsValid(QString& msg);
 //        bool validateExes(QString& msg);
         //properties
@@ -1431,13 +1454,28 @@ public:
         bool isOutputExecutable();
         bool isOutputExecutable(Settings::CompilerSet::CompilationStage stage);
 
+        bool isDebugInfoUsingUTF8() const;
+        bool forceUTF8() const;
+        bool isCompilerInfoUsingUTF8() const;
+
+        bool persistInAutoFind() const;
+        void setPersistInAutoFind(bool newPersistInAutoFind);
+
+        bool forceEnglishOutput() const;
+        void setForceEnglishOutput(bool newForceEnglishOutput);
+
     private:
-        void setDirectories(const QString& binDir, CompilerType mCompilerType);
+        void setGCCProperties(const QString& binDir, const QString& c_prog);
+        void setDirectories(const QString& binDir);
+        void setGCCDirectories(const QString& binDir);
+#ifdef ENABLE_SDCC
+        void setSDCCProperties(const QString& binDir, const QString& c_prog);
+        void setSDCCDirectories(const QString& binDir);
+#endif
         //load hard defines
         void setExecutables();
         void setUserInput();
 
-        QString findProgramInBinDirs(const QString name);
 
         QByteArray getCompilerOutput(const QString& binDir, const QString& binFile,
                                      const QStringList& arguments);
@@ -1476,6 +1514,8 @@ public:
         bool mAutoAddCharsetParams;
         QString mExecCharset;
         bool mStaticLink;
+        bool mPersistInAutoFind;
+        bool mForceEnglishOutput;
 
         QString mPreprocessingSuffix;
         QString mCompilationProperSuffix;
@@ -1496,7 +1536,8 @@ public:
         explicit CompilerSets(Settings* settings);
         PCompilerSet addSet();
         bool addSets(const QString& folder);
-        void clearSets();
+        bool addSets(const QString& folder, const QString& c_prog);
+        CompilerSetList clearSets();
         void findSets();
         void saveSets();
         void loadSets();
@@ -1506,6 +1547,7 @@ public:
         size_t size() const;
         int defaultIndex() const;
         void setDefaultIndex(int value);
+        qint64 defaultIndexTimestamp() const;
         PCompilerSet defaultSet();
         PCompilerSet getSet(int index);
 
@@ -1515,7 +1557,7 @@ public:
     private:
         PCompilerSet addSet(const QString& folder, const QString& c_prog);
         PCompilerSet addSet(const PCompilerSet &pSet);
-        bool addSets(const QString& folder, const QString& c_prog);
+        PCompilerSet addSet(const QJsonObject &set);
         void savePath(const QString& name, const QString& path);
         void savePathList(const QString& name, const QStringList& pathList);
 
@@ -1526,6 +1568,7 @@ public:
     private:
         CompilerSetList mList;
         int mDefaultIndex;
+        qint64 mDefaultIndexTimeStamp;
         Settings* mSettings;
         QStringList mCompilerCompatibleIndex; // index for old settings compatibility
     };
@@ -1557,7 +1600,9 @@ public:
     CodeCompletion &codeCompletion();
     CodeFormatter &codeFormatter();
     UI &ui();
+#ifdef ENABLE_VCS
     VCS &vcs();
+#endif
     Languages &languages();
     QString filename() const;
 
@@ -1573,10 +1618,11 @@ private:
     CodeCompletion mCodeCompletion;
     CodeFormatter mCodeFormatter;
     UI mUI;
+#ifdef ENABLE_VCS
     VCS mVCS;
+#endif
     Languages mLanguages;
 };
-
 
 extern Settings* pSettings;
 

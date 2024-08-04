@@ -35,6 +35,13 @@ ProjectGeneralWidget::ProjectGeneralWidget(const QString &name, const QString &g
     ui(new Ui::ProjectGeneralWidget)
 {
     ui->setupUi(this);
+    ui->cbType->addItems(
+                {
+                    "Win32 GUI",
+                    "Win32 Console",
+                    "Win32 Static Library",
+                    "Win32 DLL",
+                });
 }
 
 ProjectGeneralWidget::~ProjectGeneralWidget()
@@ -53,9 +60,21 @@ void ProjectGeneralWidget::doLoad()
     std::shared_ptr<Project> project = pMainWindow->project();
     if (!project)
         return;
+#ifdef ENABLE_SDCC
+    bool isMicroControllerProject = (project->options().type==ProjectType::MicroController);
+#else
+    bool isMicroControllerProject = false;
+#endif
+    ui->cbType->setVisible(!isMicroControllerProject);
+    ui->cbDefaultCpp->setVisible(!isMicroControllerProject);
+    ui->cbSupportXPTheme->setVisible(!isMicroControllerProject);
+    ui->grpIcon->setVisible(!isMicroControllerProject);
+    ui->lblEncoding->setVisible(!isMicroControllerProject);
+    ui->panelEncoding->setVisible(!isMicroControllerProject);
+
     ui->txtName->setText(project->name());
     ui->txtFileName->setText(project->filename());
-    ui->txtOutputFile->setText(project->executable());
+    ui->txtOutputFile->setText(project->outputFilename());
 
     int srcCount=0,headerCount=0,resCount=0,otherCount=0, totalCount=0;
     foreach (const PProjectUnit& unit, project->unitList()) {
@@ -101,7 +120,7 @@ void ProjectGeneralWidget::doLoad()
         ui->cbEncodingDetail->setCurrentText(defaultEncoding);
     }
 
-    ui->lstType->setCurrentRow( static_cast<int>(project->options().type));
+    ui->cbType->setCurrentIndex(static_cast<int>(project->options().type));
 
     ui->cbDefaultCpp->setChecked(project->options().isCpp);
     ui->cbSupportXPTheme->setChecked(project->options().supportXPThemes);
@@ -123,17 +142,12 @@ void ProjectGeneralWidget::doSave()
         project->setEncoding(ui->cbEncoding->currentData().toByteArray());
     }
 
-    int row = std::max(0,ui->lstType->currentRow());
+    int row = std::max(0,ui->cbType->currentIndex());
     project->options().type = static_cast<ProjectType>(row);
 
     project->options().isCpp = ui->cbDefaultCpp->isChecked();
     project->options().supportXPThemes = ui->cbSupportXPTheme->isChecked();
-    if (mIconPath.isEmpty()
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
-            || ui->lbIcon->pixmap(Qt::ReturnByValue).isNull()) {
-#else
-            || !ui->lbIcon->pixmap() || ui->lbIcon->pixmap()->isNull()) {
-#endif
+    if (mIconPath.isEmpty() || ui->lbIcon->pixmap(Qt::ReturnByValue).isNull()) {
         project->options().icon = "";
     } else {
         QString iconPath = generateAbsolutePath(project->directory(),"app.ico");
@@ -149,11 +163,7 @@ void ProjectGeneralWidget::doSave()
                 }
             }
             if (!mIconPath.endsWith(".ico",PATH_SENSITIVITY) && QImageWriter::supportedImageFormats().contains("ico")) {
-#if QT_VERSION >= QT_VERSION_CHECK(5,15,0)
                 ui->lbIcon->pixmap(Qt::ReturnByValue).save(iconPath,"ico");
-#else
-                ui->lbIcon->pixmap()->save(iconPath,"ico");
-#endif
             } else
                 copyFile(mIconPath, iconPath,true);
         }
@@ -211,7 +221,7 @@ void ProjectGeneralWidget::init()
 {
     ui->cbEncodingDetail->setVisible(false);
     ui->cbEncoding->clear();
-    ui->cbEncoding->addItem(tr("ANSI"),ENCODING_SYSTEM_DEFAULT);
+    ui->cbEncoding->addItem(tr("System Default(%1)").arg(QString(pCharsetInfoManager->getDefaultSystemEncoding())),ENCODING_SYSTEM_DEFAULT);
     ui->cbEncoding->addItem(tr("UTF-8"),ENCODING_UTF8);
     ui->cbEncoding->addItem(tr("UTF-8 BOM"),ENCODING_UTF8_BOM);
     foreach (const QString& langName, pCharsetInfoManager->languageNames()) {
@@ -224,5 +234,14 @@ void ProjectGeneralWidget::updateIcons(const QSize &)
 {
     pIconsManager->setIcon(ui->btnBrowse,IconsManager::ACTION_FILE_OPEN_FOLDER);
     pIconsManager->setIcon(ui->btnRemove, IconsManager::ACTION_MISC_CROSS);
+}
+
+
+void ProjectGeneralWidget::on_cbType_currentIndexChanged(int /*index*/)
+{
+    std::shared_ptr<Project> project = pMainWindow->project();
+    if (!project)
+        return;
+    ui->txtOutputFile->setText(project->outputFilename());
 }
 

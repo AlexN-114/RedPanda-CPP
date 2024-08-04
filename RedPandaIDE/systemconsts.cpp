@@ -86,6 +86,7 @@ SystemConsts::SystemConsts(): mDefaultFileFilters()
     mDefaultFileNameFilters.append("*.md");
     mDefaultFileNameFilters.append("*.dev");
     mDefaultFileNameFilters.append("*.s");
+    mDefaultFileNameFilters.append("*.ini");
     mDefaultFileNameFilters.append("*.S");
 }
 
@@ -94,19 +95,28 @@ const QStringList &SystemConsts::defaultFileFilters() const noexcept
     return mDefaultFileFilters;
 }
 
-const QString &SystemConsts::defaultCFileFilter() const noexcept
+QString SystemConsts::defaultCFileFilter() const noexcept
 {
     return mDefaultFileFilters[2];
 }
 
-const QString &SystemConsts::defaultCPPFileFilter() const noexcept
+QString SystemConsts::defaultCPPFileFilter() const noexcept
 {
     return mDefaultFileFilters[3];
 }
 
-const QString &SystemConsts::defaultAllFileFilter() const noexcept
+QString SystemConsts::defaultAllFileFilter() const noexcept
 {
     return mDefaultFileFilters[0];
+}
+
+QString SystemConsts::executableFileFilter() const noexcept
+{
+#ifdef Q_OS_WIN
+    return QObject::tr("Executable files (*.exe)");
+#else
+    return QObject::tr("All files (*.*)");
+#endif
 }
 
 QString SystemConsts::fileFilterFor(const QString &suffix)

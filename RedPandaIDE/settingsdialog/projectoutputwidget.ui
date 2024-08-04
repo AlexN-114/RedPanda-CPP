@@ -17,7 +17,7 @@
    <item>
     <widget class="QGroupBox" name="groupBox">
      <property name="title">
-      <string>Executable output directory</string>
+      <string>Directory for output</string>
      </property>
      <layout class="QHBoxLayout" name="horizontalLayout">
       <item>
@@ -28,10 +28,6 @@
         <property name="text">
          <string>browse</string>
         </property>
-        <property name="icon">
-         <iconset resource="../icons.qrc">
-          <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
-        </property>
        </widget>
       </item>
      </layout>
@@ -40,7 +36,7 @@
    <item>
     <widget class="QGroupBox" name="groupBox_2">
      <property name="title">
-      <string>Object file output directory</string>
+      <string>Directory for obj files</string>
      </property>
      <layout class="QHBoxLayout" name="horizontalLayout_2">
       <item>
@@ -50,10 +46,6 @@
        <widget class="QToolButton" name="btnObjOutputDir">
         <property name="text">
          <string>browse</string>
-        </property>
-        <property name="icon">
-         <iconset resource="../icons.qrc">
-          <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
         </property>
        </widget>
       </item>
@@ -79,10 +71,6 @@
        <widget class="QToolButton" name="btnCompileLog">
         <property name="text">
          <string>browse</string>
-        </property>
-        <property name="icon">
-         <iconset resource="../icons.qrc">
-          <normaloff>:/icons/images/newlook24/053-open.png</normaloff>:/icons/images/newlook24/053-open.png</iconset>
         </property>
        </widget>
       </item>
@@ -122,8 +110,17 @@
    </item>
   </layout>
  </widget>
- <resources>
-  <include location="../icons.qrc"/>
- </resources>
+ <tabstops>
+  <tabstop>txtOutputDir</tabstop>
+  <tabstop>btnOutputDir</tabstop>
+  <tabstop>txtObjOutputDir</tabstop>
+  <tabstop>btnObjOutputDir</tabstop>
+  <tabstop>grpAutosaveCompileLog</tabstop>
+  <tabstop>txtCompileLog</tabstop>
+  <tabstop>btnCompileLog</tabstop>
+  <tabstop>grpOverrideOutput</tabstop>
+  <tabstop>txtOutputFilename</tabstop>
+ </tabstops>
+ <resources/>
  <connections/>
 </ui>

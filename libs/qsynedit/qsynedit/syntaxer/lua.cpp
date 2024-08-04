@@ -984,6 +984,16 @@ QString LuaSyntaxer::blockCommentEndSymbol()
     return "]";
 }
 
+bool LuaSyntaxer::supportFolding()
+{
+    return true;
+}
+
+bool LuaSyntaxer::needsLineState()
+{
+    return false;
+}
+
 const QSet<QString> &LuaSyntaxer::customTypeKeywords() const
 {
     return mCustomTypeKeywords;
@@ -1005,22 +1015,13 @@ QMap<QString, QSet<QString> > LuaSyntaxer::scopedKeywords()
     return StdLibTables;
 }
 
-bool LuaSyntaxer::getTokenFinished() const
-{
-    if (mTokenId == TokenId::Comment
-            || mTokenId == TokenId::String) {
-        return mRange.state == RangeState::rsUnknown;
-    }
-    return true;
-}
-
-bool LuaSyntaxer::isLastLineCommentNotFinished(int state) const
+bool LuaSyntaxer::isCommentNotFinished(int state) const
 {
     return (state == RangeState::rsComment ||
             state == RangeState::rsLongComment);
 }
 
-bool LuaSyntaxer::isLastLineStringNotFinished(int state) const
+bool LuaSyntaxer::isStringNotFinished(int state) const
 {
     return state == RangeState::rsString;
 }
@@ -1184,6 +1185,11 @@ SyntaxState LuaSyntaxer::getState() const
 bool LuaSyntaxer::isIdentChar(const QChar &ch) const
 {
     return ch=='_' || ch.isDigit() || ch.isLetter();
+}
+
+bool LuaSyntaxer::isIdentStartChar(const QChar &ch) const
+{
+    return ch=='_' || ch.isLetter();
 }
 
 QSet<QString> LuaSyntaxer::keywords() {

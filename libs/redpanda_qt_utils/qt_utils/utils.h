@@ -69,6 +69,8 @@ public:
 /* text processing utils */
 const QByteArray guessTextEncoding(const QByteArray& text);
 
+const QChar *getNullTerminatedStringData(const QString& str);
+
 bool isBinaryContent(const QByteArray& text);
 bool isTextAllAscii(const QByteArray& text);
 bool isTextAllAscii(const QString& text);
@@ -143,14 +145,17 @@ QString generateAbsolutePath(const QString& dirPath, const QString& relativePath
 QStringList absolutePaths(const QString& dirPath, const QStringList& relativePaths);
 QString escapeSpacesInString(const QString& str);
 
+QString replacePrefix(const QString& oldString, const QString& prefix, const QString& newPrefix);
+
 
 bool isReadOnly(const QString& filename);
 
 int compareFileModifiedTime(const QString& filename1, const QString& filename2);
+int compareFileModifiedTime(const QString& filename1, qint64 timestamp);
 
 /* UI utils */
-void inflateRect(QRect& rect, int delta);
-void inflateRect(QRect& rect, int dx, int dy);
+void inflateRect(QRectF& rect, float delta);
+void inflateRect(QRectF& rect, float dx, float dy);
 
 int screenDPI();
 void setScreenDPI(int dpi);

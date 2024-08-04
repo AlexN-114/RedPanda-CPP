@@ -24,19 +24,22 @@
 
 namespace QSynedit {
 
-enum class SelectionMode {Normal, Line, Column};
+enum class SelectionMode {Normal, Column};
 
 enum class ProgrammingLanguage {
     DecideBySuffix,
     Composition,
     Assembly,
     ATTAssembly,
+    MixedAssembly,
+    MixedATTAssembly,
     CPP,
     GLSL,
     Makefile,
     LUA,
     XMAKE,
     Custom,
+    Textfile,
     Unknown
 };
 
@@ -52,8 +55,8 @@ struct BufferCoord {
 };
 
 struct DisplayCoord {
-    int Column;
-    int Row;
+    int x;
+    int row;
 };
 
 enum FontStyle {
@@ -86,6 +89,7 @@ using PEditingArea = std::shared_ptr<EditingArea>;
 using EditingAreaList = QList<PEditingArea>;
 using PEditingAreaList = std::shared_ptr<EditingAreaList>;
 
+bool isAssemblyLanguage(ProgrammingLanguage lang);
 }
 
 #endif // TYPES_H

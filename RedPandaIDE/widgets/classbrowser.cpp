@@ -26,11 +26,7 @@
 #include "../iconsmanager.h"
 
 ClassBrowserModel::ClassBrowserModel(QObject *parent):QAbstractItemModel(parent),
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     mMutex()
-#else
-    mMutex(QMutex::Recursive)
-#endif
 {
     mClassBrowserType = ProjectClassBrowserType::CurrentFile;
     mRoot = new ClassBrowserNode();
@@ -148,12 +144,19 @@ QVariant ClassBrowserModel::data(const QModelIndex &index, int role) const
         return QVariant();
     if (role == Qt::DisplayRole) {
         if (node->statement) {
-            if (!(node->statement->type.isEmpty()) &&
-                    ((node->statement->kind == StatementKind::skFunction)
-                     || (node->statement->kind == StatementKind::skVariable)
-                     || (node->statement->kind == StatementKind::skTypedef)
-                     )) {
-                return node->statement->command + node->statement->args + " : " + node->statement->type;
+            if (!(node->statement->type.isEmpty())) {
+                if ((node->statement->kind == StatementKind::Function)
+                     || (node->statement->kind == StatementKind::Variable)
+                     || (node->statement->kind == StatementKind::Typedef)
+                     ) {
+                    return node->statement->command + node->statement->args + " : " + node->statement->type;
+                }
+            }
+            if (node->statement->kind == StatementKind::Enum) {
+                if (!node->statement->value.isEmpty())
+                    return node->statement->command + node->statement->args + QString("(%1)").arg(node->statement->value);
+                else
+                    return node->statement->command;
             }
             return node->statement->command + node->statement->args;
         }
@@ -161,9 +164,9 @@ QVariant ClassBrowserModel::data(const QModelIndex &index, int role) const
         if (mColors && node->statement) {
             PStatement statement = (node->statement);
             StatementKind kind = getKindOfStatement(statement);
-            if (kind == StatementKind::skKeyword) {
+            if (kind == StatementKind::Keyword) {
                 if (statement->command.startsWith('#'))
-                    kind = StatementKind::skPreprocessor;
+                    kind = StatementKind::Preprocessor;
             }
             PColorSchemeItem item = mColors->value(kind,PColorSchemeItem());
             if (item) {
@@ -276,18 +279,18 @@ void ClassBrowserModel::addMembers()
         if (mCurrentFile.isEmpty())
             return;
         // show statements in the file
-        PFileIncludes p = mParser->findFileIncludes(mCurrentFile);
+        PParsedFileInfo p = mParser->findFileInfo(mCurrentFile);
         if (!p)
             return;
-        filterChildren(mRoot,p->statements);
+        filterChildren(mRoot,p->statements());
     } else {
         if (mParser->projectFiles().isEmpty())
             return;
         foreach(const QString& file,mParser->projectFiles()) {
-            PFileIncludes p = mParser->findFileIncludes(file);
+            PParsedFileInfo p = mParser->findFileInfo(file);
             if (!p)
                 return;
-            filterChildren(mRoot,p->statements);
+            filterChildren(mRoot,p->statements());
         }
     }
     sortNode(mRoot);
@@ -351,8 +354,12 @@ void ClassBrowserModel::filterChildren(ClassBrowserNode *node, const StatementMa
 
         if (mProcessedStatements.contains(statement.get()))
             continue;
+//        if (statement->properties.testFlag(StatementProperty::spDummyStatement))
+//            continue;
 
-        if (statement->kind == StatementKind::skBlock)
+        if (statement->kind == StatementKind::Block)
+            continue;
+        if (statement->kind == StatementKind::Lambda)
             continue;
         if (statement->isInherited() && !pSettings->ui().classBrowserShowInherited())
             continue;
@@ -429,13 +436,11 @@ PStatement ClassBrowserModel::createDummy(const PStatement& statement)
 
 ClassBrowserNode* ClassBrowserModel::getParentNode(const PStatement &parentStatement, int depth)
 {
-    if (depth>10)
-        return nullptr;
-    if (!parentStatement)
-        return mRoot;
-    if (!isScopeStatement(parentStatement)) {
-        return mRoot;
-    }
+    Q_ASSERT(depth<=10);
+    if (depth>10) return mRoot;
+    if (!parentStatement) return mRoot;
+    if (!isScopeStatement(parentStatement)) return mRoot;
+
     PClassBrowserNode parentNode = mScopeNodes.value(parentStatement->fullName,PClassBrowserNode());
     if (!parentNode) {
         PStatement dummyParent = createDummy(parentStatement);
@@ -448,17 +453,17 @@ ClassBrowserNode* ClassBrowserModel::getParentNode(const PStatement &parentState
 bool ClassBrowserModel::isScopeStatement(const PStatement &statement)
 {
     switch(statement->kind) {
-    case StatementKind::skClass:
-    case StatementKind::skNamespace:
-    case StatementKind::skEnumClassType:
-    case StatementKind::skEnumType:
+    case StatementKind::Class:
+    case StatementKind::Namespace:
+    case StatementKind::EnumClassType:
+    case StatementKind::EnumType:
         return true;
     default:
         return false;
     }
 }
 
-QModelIndex ClassBrowserModel::modelIndexForStatement(const QString &key)
+QModelIndex ClassBrowserModel::modelIndexForStatement(const QString &key) const
 {
     QMutexLocker locker(&mMutex);
     if (mUpdating)

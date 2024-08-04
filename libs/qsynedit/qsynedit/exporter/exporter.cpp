@@ -15,11 +15,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "exporter.h"
-
+#include "../document.h"
 #include <QClipboard>
 #include <QFile>
 #include <QGuiApplication>
 #include <QMimeData>
+#include <QPalette>
 #include <QTextCodec>
 
 namespace QSynedit {
@@ -53,7 +54,7 @@ void Exporter::exportAll(const PDocument& doc)
 void Exporter::exportRange(const PDocument& doc, BufferCoord start, BufferCoord stop)
 {
     // abort if not all necessary conditions are met
-    if (!doc || !mSyntaxer || (doc->count() == 0))
+    if (!doc || (doc->count() == 0))
         return;
     stop.line = std::max(1, std::min(stop.line, doc->count()));
     stop.ch = std::max(1, std::min(stop.ch, doc->getLine(stop.line - 1).length() + 1));
@@ -94,7 +95,7 @@ void Exporter::exportRange(const PDocument& doc, BufferCoord start, BufferCoord 
                 continue;
             }
             if (i==stop.line && (startPos+token.length() > stop.ch)) {
-                token = token.remove(stop.ch - startPos - 1);
+                token = token.left(stop.ch - startPos - 1);
             }
             if (i==start.line && startPos < start.ch-1) {
                 token = token.mid(start.ch-1-startPos);

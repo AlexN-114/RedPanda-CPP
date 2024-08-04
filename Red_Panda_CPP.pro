@@ -2,40 +2,43 @@ TEMPLATE = subdirs
 
 SUBDIRS += \
     RedPandaIDE \
-    astyle \
     consolepauser \
     redpanda_qt_utils \
-    qsynedit
-    
-astyle.subdir = tools/astyle
+    qsynedit \
+    lua
+
 consolepauser.subdir = tools/consolepauser
 redpanda_qt_utils.subdir = libs/redpanda_qt_utils
 qsynedit.subdir = libs/qsynedit
-
-APP_NAME = RedPandaCPP
-
-APP_VERSION = 2.23
+lua.subdir = libs/lua
 
 # Add the dependencies so that the RedPandaIDE project can add the depended programs
 # into the main app bundle
-RedPandaIDE.depends = astyle consolepauser qsynedit
+RedPandaIDE.depends = consolepauser qsynedit lua
 qsynedit.depends = redpanda_qt_utils
 
-win32: {
-SUBDIRS += \
-	redpanda-win-git-askpass
-redpanda-win-git-askpass.subdir = tools/redpanda-win-git-askpass
-RedPandaIDE.depends += redpanda-win-git-askpass
+APP_NAME = RedPandaCPP
+include(version.inc)
+
+!isEmpty(APP_VERSION_SUFFIX): {
+    APP_VERSION = "$${APP_VERSION}$${APP_VERSION_SUFFIX}"
 }
 
-unix: {
-SUBDIRS += \
-    redpanda-git-askpass
-redpanda-git-askpass.subdir = tools/redpanda-git-askpass
-RedPandaIDE.depends += redpanda-git-askpass
-}
+# win32: {
+# SUBDIRS += \
+#     redpanda-win-git-askpass
+# redpanda-win-git-askpass.subdir = tools/redpanda-win-git-askpass
+# RedPandaIDE.depends += redpanda-win-git-askpass
+# }
 
-linux: {
+# unix: {
+# SUBDIRS += \
+#     redpanda-git-askpass
+#     redpanda-git-askpass.subdir = tools/redpanda-git-askpass
+#     RedPandaIDE.depends += redpanda-git-askpass
+# }
+
+unix:!macos: {
     isEmpty(PREFIX) {
         PREFIX = /usr/local
     }
@@ -43,7 +46,7 @@ linux: {
         LIBEXECDIR = $${PREFIX}/libexec
     }
 
-    QMAKE_SUBSTITUTES += platform/linux/redpandaide.desktop.in
+    QMAKE_SUBSTITUTES += platform/linux/RedPandaIDE.desktop.in
 
     resources.path = $${PREFIX}/share/$${APP_NAME}
     resources.files += platform/linux/templates
@@ -55,36 +58,27 @@ linux: {
     docs.files += LICENSE
     INSTALLS += docs
 
-    equals(XDG_ADAPTIVE_ICON, "ON") {
-        xdgicons.path = $${PREFIX}/share/icons/hicolor/scalable/apps/
-        xdgicons.files += platform/linux/redpandaide.svg
-        REDPANDA_ICON_PATH = redpandaide
-        INSTALLS += xdgicons
-    } else {
-        pixmaps.path = $${PREFIX}/share/pixmaps
-        pixmaps.files += platform/linux/redpandaide.png
-        REDPANDA_ICON_PATH = $${PREFIX}/share/pixmaps/redpandaide.png
-        INSTALLS += pixmaps
-    }
+    xdgicons.path = $${PREFIX}/share/icons/hicolor/scalable/apps/
+    xdgicons.files += platform/linux/redpandaide.svg
+    INSTALLS += xdgicons
 
     desktop.path = $${PREFIX}/share/applications
-    desktop.files += platform/linux/redpandaide.desktop
+    desktop.files += platform/linux/RedPandaIDE.desktop
     INSTALLS += desktop
+
+    mime.path = $${PREFIX}/share/mime/packages
+    mime.files = platform/linux/redpandaide.xml
+    INSTALLS += mime
 }
 
 win32: {
     !isEmpty(PREFIX) {
         target.path = $${PREFIX}
-        QMAKE_SUBSTITUTES += platform/windows/installer-scripts/config.nsh.in
-        QMAKE_SUBSTITUTES += platform/windows/installer-scripts/config32.nsh.in
-        QMAKE_SUBSTITUTES += platform/windows/installer-scripts/config-clang.nsh.in
 
         resources.path = $${PREFIX}
 
         resources.files += platform/windows/templates
-        resources.files += platform/windows/installer-scripts/config.nsh
-        resources.files += platform/windows/installer-scripts/config32.nsh
-        resources.files += platform/windows/installer-scripts/config-clang.nsh
+        resources.files += platform/windows/qt.conf
         resources.files += README.md
         resources.files += NEWS.md
         resources.files += LICENSE

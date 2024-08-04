@@ -16,9 +16,9 @@
  */
 #include "filecompiler.h"
 #include "utils.h"
-#include "../mainwindow.h"
 #include "compilermanager.h"
 #include "qsynedit/syntaxer/asm.h"
+#include "../systemconsts.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -26,8 +26,8 @@
 
 
 FileCompiler::FileCompiler(const QString &filename, const QByteArray &encoding,
-                           CppCompileType compileType,bool silent,bool onlyCheckSyntax):
-    Compiler(filename, silent,onlyCheckSyntax),
+                           CppCompileType compileType, bool onlyCheckSyntax):
+    Compiler(filename, onlyCheckSyntax),
     mEncoding(encoding),
     mCompileType(compileType)
 {
@@ -66,33 +66,39 @@ bool FileCompiler::prepareForCompile()
     log(tr("- Compiler Set Name: %1").arg(compilerSet()->name()));
     log("");
     FileType fileType = getFileType(mFilename);
-    mArguments = QString(" \"%1\"").arg(mFilename);
+    mArguments = QStringList{mFilename};
     if (!mOnlyCheckSyntax) {
         switch(compilerSet()->compilationStage()) {
         case Settings::CompilerSet::CompilationStage::PreprocessingOnly:
             mOutputFile=changeFileExt(mFilename,compilerSet()->preprocessingSuffix());
-            mArguments+=" -E";
+            mArguments << "-E";
             break;
         case Settings::CompilerSet::CompilationStage::CompilationProperOnly:
             mOutputFile=changeFileExt(mFilename,compilerSet()->compilationProperSuffix());
-            mArguments+=" -S -fverbose-asm";
+            mArguments += {"-S", "-fverbose-asm"};
             break;
         case Settings::CompilerSet::CompilationStage::AssemblingOnly:
             mOutputFile=changeFileExt(mFilename,compilerSet()->assemblingSuffix());
-            mArguments+=" -c";
+            mArguments << "-c";
             break;
         case Settings::CompilerSet::CompilationStage::GenerateExecutable:
             mOutputFile = changeFileExt(mFilename,compilerSet()->executableSuffix());
         }
+#ifdef ENABLE_SDCC
+        if (compilerSet()->compilerType()==CompilerType::SDCC) {
+            if (compilerSet()->executableSuffix()==SDCC_IHX_SUFFIX) {
 
-        mArguments+=QString(" -o \"%1\"").arg(mOutputFile);
+            }
+        }
+#endif
+        mArguments += {"-o", mOutputFile};
 
 #if defined(ARCH_X86_64) || defined(ARCH_X86)
         if (mCompileType == CppCompileType::GenerateAssemblyOnly) {
             if (pSettings->languages().noSEHDirectivesWhenGenerateASM())
-                mArguments+=" -fno-asynchronous-unwind-tables";
+                mArguments << "-fno-asynchronous-unwind-tables";
             if (pSettings->languages().x86DialectOfASMGenerated()==Settings::Languages::X86ASMDialect::Intel)
-                mArguments+=" -masm=intel";
+                mArguments << "-masm=intel";
         }
 #endif
         //remove the old file if it exists
@@ -112,7 +118,7 @@ bool FileCompiler::prepareForCompile()
         mArguments += getCCompileArguments(mOnlyCheckSyntax);
         mArguments += getCIncludeArguments();
         mArguments += getProjectIncludeArguments();
-        strFileType = "GNU Assembler";
+        strFileType = tr("GNU Assembler");
         mCompiler = compilerSet()->CCompiler();
         break;
     case FileType::CSource:
@@ -132,7 +138,6 @@ bool FileCompiler::prepareForCompile()
     default:
         throw CompileError(tr("Can't find the compiler for file %1").arg(mFilename));
     }
-
     if (!mOnlyCheckSyntax)
         mArguments += getLibraryArguments(fileType);
 
@@ -165,7 +170,7 @@ bool FileCompiler::prepareForCompile()
                 break;
         }
         if (hasStart) {
-            mArguments+=" -nostartfiles";
+            mArguments << "-nostartfiles";
         }
     }
 
@@ -179,7 +184,8 @@ bool FileCompiler::prepareForCompile()
     log(tr("Processing %1 source file:").arg(strFileType));
     log("------------------");
     log(tr("%1 Compiler: %2").arg(strFileType).arg(mCompiler));
-    log(tr("Command: %1 %2").arg(extractFileName(mCompiler)).arg(mArguments));
+    QString command = escapeCommandForLog(mCompiler, mArguments);
+    log(tr("Command: %1").arg(command));
     mDirectory = extractFileDir(mFilename);
     return true;
 }

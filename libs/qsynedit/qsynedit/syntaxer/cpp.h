@@ -23,6 +23,7 @@ namespace QSynedit {
 
 class CppSyntaxer: public Syntaxer
 {
+public:
     enum class TokenId {
         Comment,
         Directive,
@@ -45,52 +46,65 @@ class CppSyntaxer: public Syntaxer
     };
 
     enum RangeState {
-        rsUnknown, rsAnsiC, rsDirective, rsDirectiveComment, rsString,
+        rsUnknown, rsAnsiC, rsDirective, rsDirectiveComment,
+        rsString, rsStringNextLine, rsStringUnfinished,
         rsMultiLineString, rsMultiLineDirective, rsCppComment,
+        rsDocstring,
         rsStringEscapeSeq,
-        rsRawString, rsSpace,rsRawStringNotEscaping,rsRawStringEnd,rsChar,
-        rsDefineIdentifier, rsDefineRemaining
+        rsRawString, rsSpace,rsRawStringNotEscaping,rsRawStringEnd,
+        rsChar, rsCharEscaping,
+        rsDefineIdentifier, rsDefineRemaining,
     };
 
-public:
     explicit CppSyntaxer();
     CppSyntaxer(const CppSyntaxer&)=delete;
     CppSyntaxer operator=(const CppSyntaxer&)=delete;
 
-    const PTokenAttribute &preprocessorAttribute() const;
+    const PTokenAttribute &preprocessorAttribute() const { return mPreprocessorAttribute; }
 
-    const PTokenAttribute &invalidAttribute() const;
+    const PTokenAttribute &invalidAttribute() const { return mInvalidAttribute; }
 
-    const PTokenAttribute &numberAttribute() const;
+    const PTokenAttribute &numberAttribute() const { return mNumberAttribute; }
 
-    const PTokenAttribute &floatAttribute() const;
+    const PTokenAttribute &floatAttribute() const { return mFloatAttribute; }
 
-    const PTokenAttribute &hexAttribute() const;
+    const PTokenAttribute &hexAttribute() const { return mHexAttribute; }
 
-    const PTokenAttribute &octAttribute() const;
+    const PTokenAttribute &octAttribute() const { return mOctAttribute; }
 
-    const PTokenAttribute &stringEscapeSequenceAttribute() const;
+    const PTokenAttribute &stringEscapeSequenceAttribute() const { return mStringEscapeSequenceAttribute; }
 
-    const PTokenAttribute &charAttribute() const;
+    const PTokenAttribute &charAttribute() const { return mCharAttribute; }
 
-    const PTokenAttribute &variableAttribute() const;
+    const PTokenAttribute &variableAttribute() const { return mVariableAttribute; }
 
-    const PTokenAttribute &functionAttribute() const;
+    const PTokenAttribute &functionAttribute() const { return mFunctionAttribute; }
 
-    const PTokenAttribute &classAttribute() const;
+    const PTokenAttribute &classAttribute() const { return mClassAttribute; }
 
-    const PTokenAttribute &globalVarAttribute() const;
+    const PTokenAttribute &globalVarAttribute() const { return mGlobalVarAttribute; }
 
-    const PTokenAttribute &localVarAttribute() const;
+    const PTokenAttribute &localVarAttribute() const { return mLocalVarAttribute; }
 
     static const QSet<QString> Keywords;
 
     static const QSet<QString> ValidIntegerSuffixes;
 
-    TokenId getTokenId();
+    static const QSet<QString> StandardAttributes;
+
+    bool isStringToNextLine(int state) { return state == RangeState::rsStringNextLine; }
+    bool isRawStringStart(int state) { return state == RangeState::rsRawString; }
+    bool isRawStringNoEscape(int state) { return state == RangeState::rsRawStringNotEscaping; }
+    bool isRawStringEnd(int state) { return state == RangeState::rsRawStringEnd; }
+    bool isCharNotFinished(int state) { return state == RangeState::rsChar || state == RangeState::rsCharEscaping; }
+    bool isCharEscaping(int state) { return state == RangeState::rsCharEscaping; }
+    bool isInAttribute(const SyntaxState &state);
+
+    TokenId getTokenId() { return mTokenId; }
 private:
     void procAndSymbol();
     void procCppStyleComment();
+    void procDocstring();
     void procAnsiCStyleComment();
     void procAsciiChar();
     void procBraceClose();
@@ -145,7 +159,6 @@ private:
 
 private:
     SyntaxState mRange;
-//    SynRangeState mSpaceRange;
     QString mLine;
     int mLineSize;
     int mRun;
@@ -173,11 +186,11 @@ private:
     PTokenAttribute mGlobalVarAttribute;
     PTokenAttribute mLocalVarAttribute;
 
-    // SynHighligterBase interface
+    // Syntaxer interface
 public:
-    bool getTokenFinished() const override;
-    bool isLastLineCommentNotFinished(int state) const override;
-    bool isLastLineStringNotFinished(int state) const override;
+    bool isCommentNotFinished(int state) const override;
+    bool isStringNotFinished(int state) const override;
+    bool isDocstringNotFinished(int state) const override;
     bool eol() const override;
     QString getToken() const override;
     const PTokenAttribute &getTokenAttribute() const override;
@@ -191,35 +204,23 @@ public:
     QString languageName() override;
     ProgrammingLanguage language() override;
 
-    // SynHighlighter interface
-public:
     SyntaxState getState() const override;
-
-    // SynHighlighter interface
-public:
     bool isIdentChar(const QChar &ch) const override;
-
-    // SynHighlighter interface
-public:
+    bool isIdentStartChar(const QChar &ch) const override;
     QSet<QString> keywords() override;
-
-    // SynHighlighter interface
-public:
     QString foldString(QString startLine) override;
     const QSet<QString> &customTypeKeywords() const;
     void setCustomTypeKeywords(const QSet<QString> &newCustomTypeKeywords);
 
-    // Highlighter interface
-public:
     bool supportBraceLevel() override;
 
-    // Syntaxer interface
-public:
     QString commentSymbol() override;
     QString blockCommentBeginSymbol() override;
     QString blockCommentEndSymbol() override;
+    virtual bool supportFolding() override;
+    virtual bool needsLineState() override;
 };
 
 }
 
-#endif // SYNEDITCPPHIGHLIGHTER_H
+#endif // QSYNEDIT_CPP_SYNTAXER_H

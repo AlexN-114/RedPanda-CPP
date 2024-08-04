@@ -18,7 +18,7 @@
 #define CPUDIALOG_H
 
 #include <QDialog>
-#include "../debugger.h"
+#include "../debugger/debugger.h"
 
 namespace Ui {
 class CPUDialog;
@@ -41,6 +41,7 @@ signals:
     void closed();
 private:
     void sendSyntaxCommand();
+    void updateSyntaxer();
 private:
     Ui::CPUDialog *ui;
     bool mInited;

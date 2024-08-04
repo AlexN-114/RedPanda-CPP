@@ -23,12 +23,23 @@
 #include <QDate>
 #include <QHash>
 #include <QQueue>
+#include <QRegularExpression>
 #include <QThread>
 #include <QTime>
 
 static QAtomicInt cppParserCount(0);
 
-CppParser::CppParser(QObject *parent) : QObject(parent)
+static QString calcFullname(const QString& parentName, const QString& name) {
+    QString s;
+    s.reserve(parentName.size()+2+name.size());
+    s+= parentName;
+    s+= "::";
+    s+= name;
+    return s;
+}
+
+CppParser::CppParser(QObject *parent) : QObject(parent),
+    mMutex()
 {
     mParserId = cppParserCount.fetchAndAddRelaxed(1);
     mLanguage = ParserLanguage::CPlusPlus;
@@ -65,6 +76,7 @@ CppParser::CppParser(QObject *parent) : QObject(parent)
 
 CppParser::~CppParser()
 {
+    //qDebug()<<"delete parser";
     while (true) {
         //wait for all methods finishes running
         {
@@ -74,6 +86,7 @@ CppParser::~CppParser()
               break;
             }
         }
+        //qDebug()<<"waiting for parse finished";
         QThread::msleep(50);
         QCoreApplication* app = QApplication::instance();
         app->processEvents();
@@ -129,23 +142,36 @@ void CppParser::clearProjectFiles()
     mProjectFiles.clear();
 }
 
-QList<PStatement> CppParser::getListOfFunctions(const QString &fileName, const QString &phrase, int line)
+QList<PStatement> CppParser::getListOfFunctions(const QString &fileName, const QString &phrase, int line) const
 {
     QMutexLocker locker(&mMutex);
     QList<PStatement> result;
     if (mParsing)
         return result;
 
-    PStatement statement = doFindStatementOf(fileName,phrase, line);
+    QStringList expression = splitExpression(phrase);
+    PStatement statement = doFindStatementOf(fileName, expression, line);
+    if (!statement)
+        return result;
+    if (statement->kind == StatementKind::Preprocessor) {
+        if (statement->args.isEmpty()) {
+            QString name = expandMacro(statement->value);
+            statement = doFindStatementOf(fileName, name ,line);
+            if (!statement)
+                return result;
+        }
+    }
+    while(statement && statement->kind == StatementKind::Alias)
+        statement = doFindAliasedStatement(statement);
     if (!statement)
         return result;
     PStatement parentScope;
-    if (statement->kind == StatementKind::skClass) {
+    if (statement->kind == StatementKind::Class) {
         parentScope = statement;
     } else
         parentScope = statement->parentScope.lock();
-    if (parentScope && parentScope->kind == StatementKind::skNamespace) {
-        PStatementList namespaceStatementsList = doFindNamespace(parentScope->command);
+    if (parentScope && parentScope->kind == StatementKind::Namespace) {
+        PStatementList namespaceStatementsList = doFindNamespace(parentScope->fullName);
         if (namespaceStatementsList) {
             for (PStatement& namespaceStatement  : *namespaceStatementsList) {
                 result.append(
@@ -159,7 +185,7 @@ QList<PStatement> CppParser::getListOfFunctions(const QString &fileName, const Q
     return result;
 }
 
-PStatement CppParser::findScopeStatement(const QString &filename, int line)
+PStatement CppParser::findScopeStatement(const QString &filename, int line) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing) {
@@ -170,22 +196,20 @@ PStatement CppParser::findScopeStatement(const QString &filename, int line)
 
 PStatement CppParser::doFindScopeStatement(const QString &filename, int line) const
 {
-    PFileIncludes fileIncludes = mPreprocessor.includesList().value(filename);
-    if (!fileIncludes)
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(filename);
+    if (!fileInfo)
         return PStatement();
 
-    return fileIncludes->scopes.findScopeAtLine(line);
+    return fileInfo->findScopeAtLine(line);
 }
 
-PFileIncludes CppParser::findFileIncludes(const QString &filename, bool deleteIt)
+PParsedFileInfo CppParser::findFileInfo(const QString &filename) const
 {
     QMutexLocker locker(&mMutex);
-    PFileIncludes fileIncludes = mPreprocessor.includesList().value(filename,PFileIncludes());
-    if (deleteIt && fileIncludes)
-        mPreprocessor.includesList().remove(filename);
-    return fileIncludes;
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(filename);
+    return fileInfo;
 }
-QString CppParser::findFirstTemplateParamOf(const QString &fileName, const QString &phrase, const PStatement& currentScope)
+QString CppParser::findFirstTemplateParamOf(const QString &fileName, const QString &phrase, const PStatement& currentScope) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -193,7 +217,7 @@ QString CppParser::findFirstTemplateParamOf(const QString &fileName, const QStri
     return doFindFirstTemplateParamOf(fileName,phrase,currentScope);
 }
 
-QString CppParser::findTemplateParamOf(const QString &fileName, const QString &phrase, int index, const PStatement &currentScope)
+QString CppParser::findTemplateParamOf(const QString &fileName, const QString &phrase, int index, const PStatement &currentScope) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -201,16 +225,16 @@ QString CppParser::findTemplateParamOf(const QString &fileName, const QString &p
     return doFindTemplateParamOf(fileName,phrase,index,currentScope);
 }
 
-PStatement CppParser::findFunctionAt(const QString &fileName, int line)
+PStatement CppParser::findFunctionAt(const QString &fileName, int line) const
 {
     QMutexLocker locker(&mMutex);
-    PFileIncludes fileIncludes = mPreprocessor.includesList().value(fileName);
-    if (!fileIncludes)
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(fileName);
+    if (!fileInfo)
         return PStatement();
-    for (PStatement& statement : fileIncludes->statements) {
-        if (statement->kind != StatementKind::skFunction
-                && statement->kind != StatementKind::skConstructor
-                && statement->kind != StatementKind::skDestructor)
+    for (const PStatement& statement : fileInfo->statements()) {
+        if (statement->kind != StatementKind::Function
+                && statement->kind != StatementKind::Constructor
+                && statement->kind != StatementKind::Destructor)
             continue;
         if (statement->line == line || statement->definitionLine == line)
             return statement;
@@ -238,7 +262,7 @@ int CppParser::findLastOperator(const QString &phrase) const
     return -1;
 }
 
-PStatementList CppParser::findNamespace(const QString &name)
+PStatementList CppParser::findNamespace(const QString &name) const
 {
     QMutexLocker locker(&mMutex);
     return doFindNamespace(name);
@@ -250,7 +274,7 @@ PStatementList CppParser::doFindNamespace(const QString &name) const
 }
 
 
-PStatement CppParser::findStatement(const QString &fullname)
+PStatement CppParser::findStatement(const QString &fullname) const
 {
     QMutexLocker locker(&mMutex);
     return doFindStatement(fullname);
@@ -265,8 +289,10 @@ PStatement CppParser::doFindStatement(const QString &fullname) const
         return PStatement();
     PStatement parentStatement;
     PStatement statement;
-    foreach (const QString& phrase, phrases) {
-        if (parentStatement && parentStatement->kind == StatementKind::skNamespace) {
+
+    for (int i=(phrases[0].isEmpty()?1:0);i<phrases.count();i++) {
+        const QString& phrase=phrases[i];
+        if (parentStatement && parentStatement->kind == StatementKind::Namespace) {
             PStatementList lst = doFindNamespace(parentStatement->fullName);
             foreach (const PStatement& namespaceStatement, *lst) {
                 statement = findMemberOfStatement(phrase,namespaceStatement);
@@ -283,7 +309,7 @@ PStatement CppParser::doFindStatement(const QString &fullname) const
     return statement;
 }
 
-PStatement CppParser::findStatementOf(const QString &fileName, const QString &phrase, int line)
+PStatement CppParser::findStatementOf(const QString &fileName, const QString &phrase, int line) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -298,7 +324,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName, const QString &
 PStatement CppParser::findStatementOf(const QString &fileName,
                                       const QString &phrase,
                                       const PStatement& currentScope,
-                                      PStatement &parentScopeType)
+                                      PStatement &parentScopeType) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -320,7 +346,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
     PStatement statement;
     getFullNamespace(phrase, namespaceName, remainder);
     if (!namespaceName.isEmpty()) {  // (namespace )qualified Name
-        PStatementList namespaceList = mNamespaces.value(namespaceName);
+        PStatementList namespaceList = doFindNamespace(namespaceName);
 
         if (!namespaceList || namespaceList->isEmpty())
             return PStatement();
@@ -340,6 +366,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
         if (!statement)
             return PStatement();
         // found in namespace
+        parentScopeType = statement->parentScope.lock();
     } else if ((phrase.length()>2) &&
                (phrase[0]==':') && (phrase[1]==':')) {
         //global
@@ -348,6 +375,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
         statement= findMemberOfStatement(nextScopeWord,PStatement());
         if (!statement)
             return PStatement();
+        parentScopeType = currentScope;
     } else {
         //unqualified name
         parentScopeType = currentScope;
@@ -356,22 +384,21 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
         if (!statement)
             return PStatement();
     }
-    parentScopeType = currentScope;
 
-    if (!memberName.isEmpty() && (statement->kind == StatementKind::skTypedef)) {
+    if (!memberName.isEmpty() && (statement->kind == StatementKind::Typedef)) {
         PStatement typeStatement = doFindTypeDefinitionOf(fileName,statement->type, parentScopeType);
         if (typeStatement)
             statement = typeStatement;
     }
 
     //using alias like 'using std::vector;'
-    if (statement->kind == StatementKind::skAlias) {
+    while (statement->kind == StatementKind::Alias) {
         statement = doFindAliasedStatement(statement);
         if (!statement)
             return PStatement();
     }
 
-    if (statement->kind == StatementKind::skConstructor) {
+    if (statement->kind == StatementKind::Constructor) {
         // we need the class, not the construtor
         statement = statement->parentScope.lock();
         if (!statement)
@@ -381,17 +408,17 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
     QString typeName;
     PStatement typeStatement;
     while (!memberName.isEmpty()) {
-        if (statement->kind!=StatementKind::skClass
+        if (statement->kind!=StatementKind::Class
                 && operatorToken == "::") {
             return PStatement();
         }
-        if (statement->kind == StatementKind::skVariable
-                || statement->kind ==  StatementKind::skParameter
-                || statement->kind ==  StatementKind::skFunction) {
+        if (statement->kind == StatementKind::Variable
+                || statement->kind ==  StatementKind::Parameter
+                || statement->kind ==  StatementKind::Function) {
 
             bool isSTLContainerFunctions = false;
 
-            if (statement->kind == StatementKind::skFunction){
+            if (statement->kind == StatementKind::Function){
                 PStatement parentScope = statement->parentScope.lock();
                 if (parentScope
                     && STLContainers.contains(parentScope->fullName)
@@ -416,7 +443,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
                 }
             }
             if (!isSTLContainerFunctions)
-                typeStatement = doFindTypeDefinitionOf(fileName,statement->type, parentScopeType);
+                typeStatement = doFindTypeDefinitionOf(fileName,statement->type, statement->parentScope.lock());
 
             //it's stl smart pointer
             if ((typeStatement)
@@ -456,7 +483,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
 
         parentScopeType=statement;
         statement = memberStatement;
-        if (!memberName.isEmpty() && (statement->kind == StatementKind::skTypedef)) {
+        if (!memberName.isEmpty() && (statement->kind == StatementKind::Typedef)) {
             PStatement typeStatement = doFindTypeDefinitionOf(fileName,statement->type, parentScopeType);
             if (typeStatement)
                 statement = typeStatement;
@@ -468,7 +495,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName,
 PEvalStatement CppParser::evalExpression(
         const QString &fileName,
         QStringList &phraseExpression,
-        const PStatement &currentScope)
+        const PStatement &currentScope) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -480,6 +507,7 @@ PEvalStatement CppParser::evalExpression(
                             pos,
                             currentScope,
                             PEvalStatement(),
+                            true,
                             true);
 }
 
@@ -490,7 +518,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName, const QString &
 }
 
 
-PStatement CppParser::findStatementOf(const QString &fileName, const QStringList &expression, const PStatement &currentScope)
+PStatement CppParser::findStatementOf(const QString &fileName, const QStringList &expression, const PStatement &currentScope) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -510,7 +538,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName, const QStringLi
     if (memberOperator.isEmpty()) {
         return findStatementStartingFrom(fileName,phrase,currentScope);
     } else if (ownerExpression.isEmpty()) {
-        return findMemberOfStatement(phrase,PStatement());
+        return findMemberOfStatement(fileName, phrase,PStatement());
     } else {
         int pos = 0;
         PEvalStatement ownerEvalStatement = doEvalExpression(fileName,
@@ -518,12 +546,12 @@ PStatement CppParser::doFindStatementOf(const QString &fileName, const QStringLi
                                 pos,
                                 currentScope,
                                 PEvalStatement(),
-                                true);
+                                true,false);
         if (!ownerEvalStatement) {
             return PStatement();
         }
         if (ownerEvalStatement->effectiveTypeStatement &&
-                ownerEvalStatement->effectiveTypeStatement->kind == StatementKind::skNamespace) {
+                ownerEvalStatement->effectiveTypeStatement->kind == StatementKind::Namespace) {
             PStatementList lst = doFindNamespace(ownerEvalStatement->effectiveTypeStatement->fullName);
             foreach (const PStatement& namespaceStatement, *lst) {
                 PStatement statement = findMemberOfStatement(phrase,namespaceStatement);
@@ -560,7 +588,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName, const QStringLi
 
 }
 
-PStatement CppParser::findStatementOf(const QString &fileName, const QStringList &expression, int line)
+PStatement CppParser::findStatementOf(const QString &fileName, const QStringList &expression, int line) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -582,7 +610,7 @@ PStatement CppParser::doFindStatementOf(const QString &fileName, const QStringLi
     return statement;
 }
 
-PStatement CppParser::findAliasedStatement(const PStatement &statement)
+PStatement CppParser::findAliasedStatement(const PStatement &statement) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -590,7 +618,7 @@ PStatement CppParser::findAliasedStatement(const PStatement &statement)
     return doFindAliasedStatement(statement);
 }
 
-QList<PStatement> CppParser::listTypeStatements(const QString &fileName, int line)
+QList<PStatement> CppParser::listTypeStatements(const QString &fileName, int line) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
@@ -598,7 +626,29 @@ QList<PStatement> CppParser::listTypeStatements(const QString &fileName, int lin
     return doListTypeStatements(fileName,line);
 }
 
-PStatement CppParser::doFindAliasedStatement(const PStatement &statement) const
+PStatement CppParser::doFindAliasedStatement(const PStatement &statement) const {
+    QSet<Statement *> foundSet;
+    return doFindAliasedStatement(statement,foundSet);
+}
+
+PStatement CppParser::doFindNoTemplateSpecializationClass(const PStatement &statement) const
+{
+    Q_ASSERT(statement!=nullptr);
+    Q_ASSERT(statement->kind == StatementKind::Class);
+    if (statement->templateSpecializationParams.isEmpty())
+        return statement;
+    PStatement parent = statement->parentScope.lock();
+    const StatementMap & statementMap = mStatementList.childrenStatements(parent);
+    QList<PStatement> list = statementMap.values(statement->command);
+    foreach(const PStatement &child, list) {
+        if (child->kind == StatementKind::Class
+                && child->templateSpecializationParams.isEmpty())
+            return child;
+    }
+    return statement;
+}
+
+PStatement CppParser::doFindAliasedStatement(const PStatement &statement, QSet<Statement *> foundSet) const
 {
     if (!statement)
         return PStatement();
@@ -608,17 +658,43 @@ PStatement CppParser::doFindAliasedStatement(const PStatement &statement) const
         return PStatement();
     QString nsName=statement->type.mid(0,pos);
     QString name = statement->type.mid(pos+2);
-    PStatementList namespaceStatements = doFindNamespace(nsName);
-    if (!namespaceStatements)
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(statement->fileName);
+    if (!fileInfo)
         return PStatement();
-    foreach (const PStatement& namespaceStatement, *namespaceStatements) {
-        QList<PStatement> resultList = findMembersOfStatement(name,namespaceStatement);
+    foundSet.insert(statement.get());
+    PStatement result;
+    if (nsName.isEmpty()) {
+        QList<PStatement> resultList = findMembersOfStatement(name,PStatement());
         foreach(const PStatement& resultStatement,resultList) {
-            if (resultStatement->kind != StatementKind::skAlias)
-                return resultStatement;
+            if (fileInfo->including(resultStatement->fileName)) {
+                result = resultStatement;
+                break;
+            }
+        }
+    } else {
+        PStatementList namespaceStatements = doFindNamespace(nsName);
+        if (!namespaceStatements)
+            return PStatement();
+        foreach (const PStatement& namespaceStatement, *namespaceStatements) {
+            QList<PStatement> resultList = findMembersOfStatement(name,namespaceStatement);
+
+            foreach(const PStatement& resultStatement,resultList) {
+                if (fileInfo->including(resultStatement->fileName)) {
+                    result = resultStatement;
+                    break;
+                }
+            }
+            if (result)
+                break;
         }
     }
-    return PStatement();
+    if (!result)
+        return PStatement();
+    if (foundSet.contains(result.get()))
+        return PStatement();
+    if (result->kind == StatementKind::Alias)
+        result = doFindAliasedStatement(result, foundSet);
+    return result;
 }
 
 QList<PStatement> CppParser::doListTypeStatements(const QString &fileName, int line) const
@@ -673,7 +749,7 @@ PStatement CppParser::findStatementStartingFrom(const QString &fileName, const Q
     }
 
     // Search all global members
-    result = findMemberOfStatement(phrase,PStatement());
+    result = findMemberOfStatement(fileName, phrase,PStatement());
     if (result)
         return result;
 
@@ -688,7 +764,7 @@ PStatement CppParser::findStatementStartingFrom(const QString &fileName, const Q
     return PStatement();
 }
 
-PStatement CppParser::findTypeDefinitionOf(const QString &fileName, const QString &aType, const PStatement& currentClass)
+PStatement CppParser::findTypeDefinitionOf(const QString &fileName, const QString &aType, const PStatement& currentClass) const
 {
     QMutexLocker locker(&mMutex);
 
@@ -698,7 +774,7 @@ PStatement CppParser::findTypeDefinitionOf(const QString &fileName, const QStrin
     return doFindTypeDefinitionOf(fileName,aType,currentClass);
 }
 
-PStatement CppParser::findTypeDef(const PStatement &statement, const QString &fileName)
+PStatement CppParser::findTypeDef(const PStatement &statement, const QString &fileName) const
 {
     QMutexLocker locker(&mMutex);
 
@@ -727,7 +803,7 @@ bool CppParser::freeze(const QString &serialId)
     return true;
 }
 
-QStringList CppParser::getClassesList()
+QStringList CppParser::getClassesList() const
 {
     QMutexLocker locker(&mMutex);
 
@@ -740,7 +816,7 @@ QStringList CppParser::getClassesList()
         PStatement statement = queue.dequeue();
         StatementMap statementMap = mStatementList.childrenStatements(statement);
         for (PStatement& child:statementMap) {
-            if (child->kind == StatementKind::skClass)
+            if (child->kind == StatementKind::Class)
                 list.append(child->command);
             if (!child->children.isEmpty())
                 queue.enqueue(child);
@@ -749,42 +825,46 @@ QStringList CppParser::getClassesList()
     return list;
 }
 
-QStringList CppParser::getFileDirectIncludes(const QString &filename)
+QStringList CppParser::getFileDirectIncludes(const QString &filename) const
 {
     QMutexLocker locker(&mMutex);
     if (mParsing)
         return QStringList();
     if (filename.isEmpty())
         return QStringList();
-    PFileIncludes fileIncludes = mPreprocessor.includesList().value(filename,PFileIncludes());
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(filename);
 
-    if (fileIncludes) {
-        return fileIncludes->directIncludes;
+    if (fileInfo) {
+        return fileInfo->directIncludes();
     }
     return QStringList();
 
 }
 
-QSet<QString> CppParser::getFileIncludes(const QString &filename)
-{
-    QMutexLocker locker(&mMutex);
+QSet<QString> CppParser::internalGetIncludedFiles(const QString &filename) const {
     QSet<QString> list;
     if (mParsing)
         return list;
     if (filename.isEmpty())
         return list;
     list.insert(filename);
-    PFileIncludes fileIncludes = mPreprocessor.includesList().value(filename,PFileIncludes());
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(filename);
 
-    if (fileIncludes) {
-        foreach (const QString& file, fileIncludes->includeFiles.keys()) {
+    if (fileInfo) {
+        foreach (const QString& file, fileInfo->includes()) {
             list.insert(file);
         }
     }
     return list;
 }
 
-QSet<QString> CppParser::getFileUsings(const QString &filename)
+QSet<QString> CppParser::getIncludedFiles(const QString &filename) const
+{
+    QMutexLocker locker(&mMutex);
+    return internalGetIncludedFiles(filename);
+}
+
+QSet<QString> CppParser::getFileUsings(const QString &filename) const
 {
     QMutexLocker locker(&mMutex);
     return internalGetFileUsings(filename);
@@ -797,15 +877,15 @@ QSet<QString> CppParser::internalGetFileUsings(const QString &filename) const
         return result;
 //    if (mParsing)
 //        return result;
-    PFileIncludes fileIncludes= mPreprocessor.includesList().value(filename,PFileIncludes());
-    if (fileIncludes) {
-        foreach (const QString& usingName, fileIncludes->usings) {
+    PParsedFileInfo fileInfo= mPreprocessor.findFileInfo(filename);
+    if (fileInfo) {
+        foreach (const QString& usingName, fileInfo->usings()) {
             result.insert(usingName);
         }
-        foreach (const QString& subFile,fileIncludes->includeFiles.keys()){
-            PFileIncludes subIncludes = mPreprocessor.includesList().value(subFile,PFileIncludes());
+        foreach (const QString& subFile,fileInfo->includes()){
+            PParsedFileInfo subIncludes = mPreprocessor.findFileInfo(subFile);
             if (subIncludes) {
-                foreach (const QString& usingName, subIncludes->usings) {
+                foreach (const QString& usingName, subIncludes->usings()) {
                     result.insert(usingName);
                 }
             }
@@ -814,7 +894,7 @@ QSet<QString> CppParser::internalGetFileUsings(const QString &filename) const
     return result;
 }
 
-QString CppParser::getHeaderFileName(const QString &relativeTo, const QString &headerName, bool fromNext)
+QString CppParser::getHeaderFileName(const QString &relativeTo, const QString &headerName, bool fromNext) const
 {
     QMutexLocker locker(&mMutex);
     QString currentDir = includeTrailingPathDelimiter(extractFileDir(relativeTo));
@@ -844,7 +924,19 @@ QString CppParser::getHeaderFileName(const QString &relativeTo, const QString &h
         projectIncludes = mPreprocessor.projectIncludePathList();
     }
     return ::getHeaderFilename(relativeTo, headerName, includes,
-                             projectIncludes);
+                               projectIncludes);
+}
+
+bool CppParser::isLineVisible(const QString &fileName, int line) const
+{
+    QMutexLocker locker(&mMutex);
+    if (mParsing) {
+        return true;
+    }
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(fileName);
+    if (!fileInfo)
+        return true;
+    return fileInfo->isLineVisible(line);
 }
 
 void CppParser::invalidateFile(const QString &fileName)
@@ -863,7 +955,7 @@ void CppParser::invalidateFile(const QString &fileName)
     mParsing = false;
 }
 
-bool CppParser::isIncludeLine(const QString &line)
+bool CppParser::isIncludeLine(const QString &line) const
 {
     QString trimmedLine = line.trimmed();
     if ((trimmedLine.length() > 0)
@@ -874,7 +966,7 @@ bool CppParser::isIncludeLine(const QString &line)
     return false;
 }
 
-bool CppParser::isIncludeNextLine(const QString &line)
+bool CppParser::isIncludeNextLine(const QString &line) const
 {
     QString trimmedLine = line.trimmed();
     if ((trimmedLine.length() > 0)
@@ -885,43 +977,61 @@ bool CppParser::isIncludeNextLine(const QString &line)
     return false;
 }
 
-bool CppParser::isProjectHeaderFile(const QString &fileName)
+bool CppParser::isProjectHeaderFile(const QString &fileName) const
 {
     QMutexLocker locker(&mMutex);
     return ::isSystemHeaderFile(fileName,mPreprocessor.projectIncludePaths());
 }
 
-bool CppParser::isSystemHeaderFile(const QString &fileName)
+bool CppParser::isSystemHeaderFile(const QString &fileName) const
 {
     QMutexLocker locker(&mMutex);
     return ::isSystemHeaderFile(fileName,mPreprocessor.includePaths());
 }
 
-void CppParser::parseFile(const QString &fileName, bool inProject, bool onlyIfNotParsed, bool updateView)
+void CppParser::parseFile(const QString &fileName, bool inProject, bool onlyIfNotParsed, bool updateView, std::shared_ptr<CppParser> parserPtr)
 {
     if (!mEnabled)
         return;
     {
         QMutexLocker locker(&mMutex);
-        if (mParsing || mLockCount>0)
+        if (mParsing) {
+            mLastParseFileCommand = std::make_unique<ParseFileCommand>();
+            mLastParseFileCommand->fileName = fileName;
+            mLastParseFileCommand->inProject = inProject;
+            mLastParseFileCommand->onlyIfNotParsed = onlyIfNotParsed;
+            mLastParseFileCommand->updateView = updateView;
+            mLastParseFileCommand->parserPtr = parserPtr;
             return;
-        updateSerialId();
+        }
+        if (mLockCount>0)
+            return;
         mParsing = true;
+        updateSerialId();
         if (updateView)
             emit onBusy();
         emit onStartParsing();
     }
     {
         auto action = finally([&,this]{
-            mParsing = false;
-
+            QMutexLocker locker(&mMutex);
             if (updateView)
                 emit onEndParsing(mFilesScannedCount,1);
             else
                 emit onEndParsing(mFilesScannedCount,0);
+
+            if (mLastParseFileCommand) {
+                ::parseFile(mLastParseFileCommand->parserPtr,
+                            mLastParseFileCommand->fileName,
+                            mLastParseFileCommand->inProject,
+                            mLastParseFileCommand->onlyIfNotParsed,
+                            mLastParseFileCommand->updateView);
+                mLastParseFileCommand = nullptr;
+            }
+            mParsing = false;
         });
         QString fName = fileName;
-        if (onlyIfNotParsed && mPreprocessor.scannedFiles().contains(fName))
+        if (onlyIfNotParsed && mPreprocessor.fileScanned(fName))
             return;
 
         if (inProject) {
@@ -935,7 +1045,7 @@ void CppParser::parseFile(const QString &fileName, bool inProject, bool onlyIfNo
             foreach (const QString& file,files) {
                 mFilesScannedCount++;
                 emit onProgress(file,mFilesToScanCount,mFilesScannedCount);
-                if (!mPreprocessor.scannedFiles().contains(file)) {
+                if (!mPreprocessor.fileScanned(file)) {
                     internalParse(file);
                 }
             }
@@ -948,15 +1058,6 @@ void CppParser::parseFile(const QString &fileName, bool inProject, bool onlyIfNo
             emit onProgress(fileName,mFilesToScanCount,mFilesScannedCount);
             internalParse(fileName);
         }
-
-//        if (inProject)
-//            mProjectFiles.insert(fileName);
-//        else {
-//            mProjectFiles.remove(fileName);
-//        }
-
-        // Parse from disk or stream
-
     }
 }
 
@@ -991,7 +1092,7 @@ void CppParser::parseFileList(bool updateView)
         foreach (const QString& file, files) {
             mFilesScannedCount++;
             emit onProgress(mCurrentFile,mFilesToScanCount,mFilesScannedCount);
-            if (!mPreprocessor.scannedFiles().contains(file)) {
+            if (!mPreprocessor.fileScanned(file)) {
                 internalParse(file);
             }
         }
@@ -1022,10 +1123,10 @@ void CppParser::parseHardDefines()
                         "",
                         define->value,
                         -1,
-                        StatementKind::skPreprocessor,
+                        StatementKind::Preprocessor,
                         StatementScope::Global,
                         StatementAccessibility::None,
-                        StatementProperty::spHasDefinition);
+                        StatementProperty::HasDefinition);
         }
     }
 }
@@ -1069,16 +1170,15 @@ void CppParser::resetParser()
         mStatementList.clear();
 
         mProjectFiles.clear();
-        mBlockBeginSkips.clear(); //list of for/catch block begin token index;
-        mBlockEndSkips.clear(); //list of for/catch block end token index;
+//        mBlockBeginSkips.clear(); //list of for/catch block begin token index;
+//        mBlockEndSkips.clear(); //list of for/catch block end token index;
         mInlineNamespaceEndSkips.clear(); // list for inline namespace end token index;
         mFilesToScan.clear(); // list of base files to scan
         mNamespaces.clear();  // namespace and the statements in its scope
         mInlineNamespaces.clear();
-
+        mClassInheritances.clear();
         mPreprocessor.clear();
         mTokenizer.clear();
-
     }
 }
 
@@ -1088,14 +1188,17 @@ void CppParser::unFreeze()
     mLockCount--;
 }
 
-QSet<QString> CppParser::scannedFiles()
+bool CppParser::fileScanned(const QString &fileName) const
 {
-    return mPreprocessor.scannedFiles();
+    QMutexLocker locker(&mMutex);
+    if (mParsing)
+        return false;
+    return mPreprocessor.fileScanned(fileName);
 }
 
-bool CppParser::isFileParsed(const QString &filename)
+bool CppParser::isFileParsed(const QString &filename) const
 {
-    return mPreprocessor.scannedFiles().contains(filename);
+    return mPreprocessor.fileScanned(filename);
 }
 
 QString CppParser::getScopePrefix(const PStatement& statement) const{
@@ -1111,11 +1214,11 @@ QString CppParser::getScopePrefix(const PStatement& statement) const{
     }
 }
 
-QString CppParser::prettyPrintStatement(const PStatement& statement, const QString& filename, int line)
+QString CppParser::prettyPrintStatement(const PStatement& statement, const QString& filename, int line) const
 {
     QString result;
     switch(statement->kind) {
-    case StatementKind::skPreprocessor:
+    case StatementKind::Preprocessor:
         if (statement->command == "__FILE__")
             result = '"'+filename+'"';
         else if (statement->command == "__LINE__")
@@ -1135,44 +1238,50 @@ QString CppParser::prettyPrintStatement(const PStatement& statement, const QStri
             result = hintText;
         }
         break;
-    case StatementKind::skEnumClassType:
+    case StatementKind::EnumClassType:
         result = "enum class "+statement->command;
         break;
-    case StatementKind::skEnumType:
+    case StatementKind::EnumType:
         result = "enum "+statement->command;
         break;
-    case StatementKind::skEnum:
-        result = statement->type + "::" + statement->command;
+    case StatementKind::Enum:
+        if (!statement->type.isEmpty())
+            result = statement->type + "::";
+        else
+            result = "";
+        result += statement->command;
+        if (!statement->value.isEmpty())
+            result += "(" + statement->value + ")";
         break;
-    case StatementKind::skTypedef:
+    case StatementKind::Typedef:
         result = "typedef "+statement->type+" "+statement->command;
         if (!statement->args.isEmpty())
             result += " "+statement->args;
         break;
-    case StatementKind::skAlias:
+    case StatementKind::Alias:
         result = "using "+statement->type;
         break;
-    case StatementKind::skFunction:
-    case StatementKind::skVariable:
-    case StatementKind::skParameter:
-    case StatementKind::skClass:
+    case StatementKind::Function:
+    case StatementKind::Variable:
+    case StatementKind::Parameter:
+    case StatementKind::Class:
         if (statement->scope!= StatementScope::Local)
             result = getScopePrefix(statement)+ ' '; // public
         result += statement->type + ' '; // void
         result += statement->fullName; // A::B::C::Bar
         result += statement->args; // (int a)
         break;
-    case StatementKind::skNamespace:
+    case StatementKind::Namespace:
         result = statement->fullName; // Bar
         break;
-    case StatementKind::skConstructor:
+    case StatementKind::Constructor:
         result = getScopePrefix(statement); // public
         result += QObject::tr("constructor") + ' '; // constructor
         result += statement->type + ' '; // void
         result += statement->fullName; // A::B::C::Bar
         result += statement->args; // (int a)
         break;
-    case StatementKind::skDestructor:
+    case StatementKind::Destructor:
         result = getScopePrefix(statement); // public
         result += QObject::tr("destructor") + ' '; // constructor
         result += statement->type + ' '; // void
@@ -1193,7 +1302,7 @@ QString CppParser::getTemplateParam(const PStatement& statement,
 {
     if (!statement)
         return "";
-    if (statement->kind != StatementKind::skTypedef)
+    if (statement->kind != StatementKind::Typedef)
         return "";
     if (statement->type == phrase) // prevent infinite loop
         return "";
@@ -1205,7 +1314,7 @@ int CppParser::getTemplateParamStart(const QString &s, int startAt, int index) c
     int i = startAt+1;
     int count=0;
     while (count<index) {
-        i = getTemplateParamEnd(s,i) + 2;
+        i = getTemplateParamEnd(s,i)+1;
         count++;
     }
     return i;
@@ -1240,10 +1349,10 @@ void CppParser::addProjectFile(const QString &fileName, bool needScan)
     //value.replace('/','\\'); // only accept full file names
 
     // Update project listing
-        mProjectFiles.insert(fileName);
+    mProjectFiles.insert(fileName);
 
     // Only parse given file
-    if (needScan && !mPreprocessor.scannedFiles().contains(fileName)) {
+    if (needScan && !mPreprocessor.fileScanned(fileName)) {
         mFilesToScan.insert(fileName);
     }
 }
@@ -1254,7 +1363,7 @@ PStatement CppParser::addInheritedStatement(const PStatement& derived, const PSt
     PStatement statement = addStatement(
                 derived,
                 inherit->fileName,
-                inherit->type, // "Type" is already in use
+                inherit->type,
                 inherit->command,
                 inherit->args,
                 inherit->noNameArgs,
@@ -1263,7 +1372,7 @@ PStatement CppParser::addInheritedStatement(const PStatement& derived, const PSt
                 inherit->kind,
                 inherit->scope,
                 access,
-                inherit->properties | StatementProperty::spInherited);
+                inherit->properties | StatementProperty::Inherited);
     return statement;
 }
 
@@ -1309,25 +1418,30 @@ PStatement CppParser::addStatement(const PStatement& parent,
         newType += newCommand.front();
         newCommand.remove(0,1); // remove first
     }
+    QString templateSpecializationParams;
+    int pos = newCommand.indexOf("<");
+    if (pos>0 && !newCommand.startsWith("operator<")) {
+        templateSpecializationParams = newCommand.mid(pos);
+        newCommand = newCommand.left(pos);
+    }
+    newCommand.squeeze();
 //    if (newCommand.startsWith("::") && parent && kind!=StatementKind::skBlock ) {
 //        qDebug()<<command<<fileName<<line<<kind<<parent->fullName;
 //    }
-
-    if (kind == StatementKind::skConstructor
-            || kind == StatementKind::skFunction
-            || kind == StatementKind::skDestructor
-            || kind == StatementKind::skVariable
+    if (kind == StatementKind::Constructor
+            || kind == StatementKind::Function
+            || kind == StatementKind::Destructor
+            || kind == StatementKind::Variable
             ) {
         //find
-        if (properties.testFlag(StatementProperty::spHasDefinition)) {
+        if (properties.testFlag(StatementProperty::HasDefinition)) {
             PStatement oldStatement = findStatementInScope(newCommand,noNameArgs,kind,parent);
             if (oldStatement  && !oldStatement->hasDefinition()) {
                 oldStatement->setHasDefinition(true);
                 if (oldStatement->fileName!=fileName) {
-                    PFileIncludes fileIncludes=mPreprocessor.includesList().value(fileName);
-                    if (fileIncludes) {
-                        fileIncludes->statements.insert(oldStatement->fullName,
-                                                         oldStatement);
+                    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(fileName);
+                    if (fileInfo) {
+                        fileInfo->addStatement(oldStatement);
                     }
                 }
                 oldStatement->definitionLine = line;
@@ -1348,6 +1462,7 @@ PStatement CppParser::addStatement(const PStatement& parent,
     result->args = args;
     result->noNameArgs = noNameArgs;
     result->value = value;
+    result->templateSpecializationParams = templateSpecializationParams;
     result->kind = kind;
     result->scope = scope;
     result->accessibility = accessibility;
@@ -1363,16 +1478,19 @@ PStatement CppParser::addStatement(const PStatement& parent,
         result->setInProject(false);
         result->setInSystemHeader(true);
     }
-    //result->children;
-    //result->friends;
     if (scope == StatementScope::Local)
         result->fullName =  newCommand;
     else
-        result->fullName =  getFullStatementName(newCommand, parent);
+        result->fullName =  getFullStatementName(newCommand + templateSpecializationParams, parent);
     result->usageCount = -1;
+
+    result->args.squeeze();
+    result->noNameArgs.squeeze();
+    result->value.squeeze();
+    result->type.squeeze();
     mStatementList.add(result);
-    if (result->kind == StatementKind::skNamespace) {
-        PStatementList namespaceList = mNamespaces.value(result->fullName,PStatementList());
+    if (result->kind == StatementKind::Namespace) {
+        PStatementList namespaceList = doFindNamespace(result->fullName);
         if (!namespaceList) {
             namespaceList=std::make_shared<StatementList>();
             mNamespaces.insert(result->fullName,namespaceList);
@@ -1380,15 +1498,12 @@ PStatement CppParser::addStatement(const PStatement& parent,
         namespaceList->append(result);
     }
 
-    if (result->kind!= StatementKind::skBlock) {
-        PFileIncludes fileIncludes = mPreprocessor.includesList().value(fileName);
-        if (fileIncludes) {
-            fileIncludes->statements.insert(result->fullName,result);
+    if (result->kind!= StatementKind::Block) {
+        PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(fileName);
+        if (fileInfo) {
+            fileInfo->addStatement(result);
         }
     }
-//    if (result->command=="sync_with_stdio") {
-//        qDebug()<<result->fullName<<result->isStatic()<<(int)result->accessibility;
-//    }
     return result;
 }
 
@@ -1414,10 +1529,13 @@ PStatement CppParser::addStatement(const PStatement &parent,
         QChar ch=mTokenizer[i]->text[0];
         if (this->isIdentChar(ch)) {
             QString spaces=(i>argStart)?" ":"";
-            args+=spaces;
+            if (args.length()>0 && (isWordChar(args.back()) || args.back()=='>'))
+                args+=spaces;
             word += mTokenizer[i]->text;
             if (!typeGetted) {
-                noNameArgs+=spaces+word;
+                if (noNameArgs.length()>0 && isWordChar(noNameArgs.back()))
+                    noNameArgs+=spaces;
+                noNameArgs+=word;
                 if (mCppTypeKeywords.contains(word) || !isCppKeyword(word))
                     typeGetted = true;
             } else {
@@ -1427,12 +1545,18 @@ PStatement CppParser::addStatement(const PStatement &parent,
             }
             word="";
         } else if (this->isDigitChar(ch)) {
-            args+=" ";
+        } else if (mTokenizer[i]->text=="::") {
+            if (braceLevel==0) {
+                noNameArgs+= mTokenizer[i]->text;
+                typeGetted = false;
+            }
         } else {
             switch(ch.unicode()) {
             case ',':
-                if (braceLevel==0)
+                if (braceLevel==0) {
                     typeGetted=false;
+                    noNameArgs+= mTokenizer[i]->text;
+                }
                 break;
             case '{':
             case '[':
@@ -1449,15 +1573,17 @@ PStatement CppParser::addStatement(const PStatement &parent,
                 //todo: * and & processing
             case '*':
             case '&':
-                if (braceLevel==0)
-                    word+=ch;
+                if (braceLevel==0) {
+                    noNameArgs+= mTokenizer[i]->text;
+                }
                 break;
             }
-            noNameArgs+= mTokenizer[i]->text;
         }
         args+=mTokenizer[i]->text;
     }
-
+    if (!word.isEmpty()) {
+        noNameArgs.append(word);
+    }
     args="("+args.trimmed()+")";
     noNameArgs="("+noNameArgs.trimmed()+")";
     return addStatement(
@@ -1496,47 +1622,83 @@ void CppParser::addMethodParameterStatement(QStringList words, int line, const P
                         "",
                         "",
                         line,
-                        StatementKind::skParameter,
+                        StatementKind::Parameter,
                         StatementScope::Local,
                         StatementAccessibility::None,
-                        StatementProperty::spHasDefinition);
+                        StatementProperty::HasDefinition);
         }
     }
 }
 
-void CppParser::setInheritance(int index, const PStatement& classStatement, bool isStruct)
+void CppParser::setInheritance(int index, const PStatement& classStatement, bool isStruct, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
     // Clear it. Assume it is assigned
     StatementAccessibility lastInheritScopeType = StatementAccessibility::None;
     // Assemble a list of statements in text form we inherit from
     while (true) {
-        StatementAccessibility inheritScopeType = getClassMemberAccessibility(mTokenizer[index]->text);
         QString currentText = mTokenizer[index]->text;
         if (currentText=='(') {
             //skip to matching ')'
             index=mTokenizer[index]->matchIndex;
-        } else if (inheritScopeType == StatementAccessibility::None) {
-            if (currentText !=','
-                    && currentText!=':') {
+        } else if (currentText=="::"
+                   || (isIdentChar(currentText[0]))) {
+            KeywordType keywordType = mCppKeywords.value(currentText, KeywordType::None);
+            if (keywordType!=KeywordType::None) {
+                StatementAccessibility inheritScopeType = getClassMemberAccessibility(mTokenizer[index]->text);
+                if (inheritScopeType != StatementAccessibility::None) {
+                    lastInheritScopeType = inheritScopeType;
+                }
+            } else {
                 QString basename = currentText;
+                bool isGlobal = false;
+                index++;
+                if (basename=="::") {
+                    if (index>=maxIndex || !isIdentChar(mTokenizer[index]->text[0])) {
+                        return;
+                    }
+                    isGlobal=true;
+                    basename=mTokenizer[index]->text;
+                    index++;
+                }
+
                 //remove template staff
                 if (basename.endsWith('>')) {
                     int pBegin = basename.indexOf('<');
                     if (pBegin>=0)
                         basename.truncate(pBegin);
                 }
-                // Find the corresponding PStatement
-                PStatement statement = doFindStatementOf(mCurrentFile,basename,
-                                                       classStatement->parentScope.lock());
-                if (statement && statement->kind == StatementKind::skClass) {
-                    inheritClassStatement(classStatement,isStruct,statement,lastInheritScopeType);
+
+                while (index+1<maxIndex
+                       && mTokenizer[index]->text=="::"
+                       && isIdentChar(mTokenizer[index+1]->text[0])){
+                    basename += "::" + mTokenizer[index+1]->text;
+                    index+=2;
+                    //remove template staff
+                    if (basename.endsWith('>')) {
+                        int pBegin = basename.indexOf('<');
+                        if (pBegin>=0)
+                            basename.truncate(pBegin);
+                    }
                 }
+
+                PClassInheritanceInfo inheritanceInfo = std::make_shared<ClassInheritanceInfo>();
+
+                inheritanceInfo->derivedClass = classStatement;
+                inheritanceInfo->file = mCurrentFile;
+                inheritanceInfo->parentClassName = basename;
+                inheritanceInfo->isGlobal = isGlobal;
+                inheritanceInfo->isStruct = isStruct;
+                inheritanceInfo->visibility = lastInheritScopeType;
+                inheritanceInfo->handled = false;
+
+                mClassInheritances.append(inheritanceInfo);
+
+                handleInheritance(classStatement, inheritanceInfo);
             }
         }
+
         index++;
-        lastInheritScopeType = inheritScopeType;
-        if (index >= tokenCount)
+        if (index >= maxIndex)
             break;
         if (mTokenizer[index]->text.front() == '{'
                 || mTokenizer[index]->text.front() == ';')
@@ -1572,9 +1734,9 @@ void CppParser::addSoloScopeLevel(PStatement& statement, int line, bool shouldRe
     // Add class list
 
     PStatement parentScope;
-    if (shouldResetBlock && statement && (statement->kind == StatementKind::skBlock)) {
+    if (shouldResetBlock && statement && (statement->kind == StatementKind::Block)) {
         parentScope = statement->parentScope.lock();
-        while (parentScope && (parentScope->kind == StatementKind::skBlock)) {
+        while (parentScope && (parentScope->kind == StatementKind::Block)) {
             parentScope = parentScope->parentScope.lock();
         }
         if (!parentScope)
@@ -1587,16 +1749,16 @@ void CppParser::addSoloScopeLevel(PStatement& statement, int line, bool shouldRe
 
     mCurrentScope.append(statement);
 
-    PFileIncludes fileIncludes = mPreprocessor.includesList().value(mCurrentFile);
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(mCurrentFile);
 
-    if (fileIncludes) {
-        fileIncludes->scopes.addScope(line,statement);
+    if (fileInfo) {
+        fileInfo->addScope(line,statement);
     }
 
     // Set new scope
     if (!statement)
         mCurrentMemberAccessibility = StatementAccessibility::None; // {}, namespace or class that doesn't exist
-    else if (statement->kind == StatementKind::skNamespace)
+    else if (statement->kind == StatementKind::Namespace)
         mCurrentMemberAccessibility = StatementAccessibility::None;
     else if (statement->type == "class")
         mCurrentMemberAccessibility = StatementAccessibility::Private; // classes are private by default
@@ -1609,7 +1771,7 @@ void CppParser::addSoloScopeLevel(PStatement& statement, int line, bool shouldRe
 #endif
 }
 
-void CppParser::removeScopeLevel(int line)
+void CppParser::removeScopeLevel(int line, int maxIndex)
 {
     // Remove class list
     if (mCurrentScope.isEmpty())
@@ -1619,20 +1781,20 @@ void CppParser::removeScopeLevel(int line)
 //        qDebug()<<"--remove scope"<<mCurrentFile<<line<<mCurrentClassScope.count();
 #endif
     PStatement currentScope = getCurrentScope();
-    PFileIncludes fileIncludes = mPreprocessor.includesList().value(mCurrentFile);
+    PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(mCurrentFile);
     if (currentScope) {
-        if (currentScope->kind == StatementKind::skBlock) {
+        if (currentScope->kind == StatementKind::Block) {
             if (currentScope->children.isEmpty()) {
                 // remove no children block
-                if (fileIncludes) {
-                    fileIncludes->scopes.removeLastScope();
-                }
+                if (fileInfo)
+                    fileInfo->removeLastScope();
                 mStatementList.deleteStatement(currentScope);
             } else {
-                fileIncludes->statements.insert(currentScope->fullName,currentScope);
+                if (fileInfo)
+                    fileInfo->addStatement(currentScope);
             }
-        } else if (currentScope->kind == StatementKind::skClass) {
-            mIndex=indexOfNextSemicolon(mIndex);
+        } else if (currentScope->kind == StatementKind::Class) {
+            mIndex=indexOfNextSemicolon(mIndex, maxIndex);
         }
     }
     mCurrentScope.pop_back();
@@ -1640,9 +1802,8 @@ void CppParser::removeScopeLevel(int line)
 
     // Set new scope
     currentScope = getCurrentScope();
-  //  fileIncludes:=FindFileIncludes(fCurrentFile);
-    if (fileIncludes && fileIncludes->scopes.lastScope()!=currentScope) {
-        fileIncludes->scopes.addScope(line,currentScope);
+    if (fileInfo && fileInfo->lastScope()!=currentScope) {
+        fileInfo->addScope(line,currentScope);
     }
 
     if (!currentScope) {
@@ -1658,21 +1819,19 @@ void CppParser::internalClear()
     mMemberAccessibilities.clear();
     mIndex = 0;
     mCurrentMemberAccessibility = StatementAccessibility::None;
-    mBlockBeginSkips.clear();
-    mBlockEndSkips.clear();
+//    mBlockBeginSkips.clear();
+//    mBlockEndSkips.clear();
     mInlineNamespaceEndSkips.clear();
 }
 
 QStringList CppParser::sortFilesByIncludeRelations(const QSet<QString> &files)
 {
     QStringList result;
-    QSet<QString> saveScannedFiles;
-
-    saveScannedFiles=mPreprocessor.scannedFiles();
+    QSet<QString> saveScannedFiles{mPreprocessor.scannedFiles()};
 
     //rebuild file include relations
     foreach(const QString& file, files) {
-        if (mPreprocessor.scannedFiles().contains(file))
+        if (mPreprocessor.fileScanned(file))
             continue;
         //already removed in interalInvalidateFiles
         //mPreprocessor.removeScannedFile(file);
@@ -1686,12 +1845,14 @@ QStringList CppParser::sortFilesByIncludeRelations(const QSet<QString> &files)
     while (!fileSet.isEmpty()) {
         bool found=false;
         foreach (const QString& file,fileSet) {
-            PFileIncludes fileIncludes = mPreprocessor.includesList().value(file);
+            PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(file);
             bool hasInclude=false;
-            foreach(const QString& inc,fileIncludes->includeFiles.keys()) {
-                if (fileSet.contains(inc)) {
-                    hasInclude=true;
-                    break;
+            if (fileInfo) {
+                foreach(const QString& inc,fileInfo->includes()) {
+                    if (fileSet.contains(inc)) {
+                        hasInclude=true;
+                        break;
+                    }
                 }
             }
             if (!hasInclude) {
@@ -1708,11 +1869,174 @@ QStringList CppParser::sortFilesByIncludeRelations(const QSet<QString> &files)
             }
         }
     }
-    QSet<QString> newScannedFiles = mPreprocessor.scannedFiles();
+    QSet<QString> newScannedFiles{mPreprocessor.scannedFiles()};
     foreach(const QString& file, newScannedFiles) {
         if (!saveScannedFiles.contains(file))
             mPreprocessor.removeScannedFile(file);
     }
+    return result;
+}
+
+int CppParser::evaluateConstExpr(int endIndex, bool &ok)
+{
+    int result = 0;
+    if (mIndex>=endIndex) {
+        ok=false;
+        return 0;
+    }
+    result = evaluateAdditionConstExpr(endIndex,ok);
+    if (mIndex!=endIndex)
+        ok = false;
+    return result;
+}
+
+int CppParser::evaluateAdditionConstExpr(int endIndex, bool &ok)
+{
+    int result = 0;
+    if (mIndex>=endIndex) {
+        ok=false;
+        return 0;
+    }
+    result = evaluateMultiplyConstExpr(endIndex,ok);
+    if (!ok)
+        return result;
+    while (mIndex<endIndex) {
+        if (mTokenizer[mIndex]->text=='+') {
+            mIndex++;
+            int temp = evaluateMultiplyConstExpr(endIndex,ok);
+            if (!ok)
+                return result;
+            result+=temp;
+        } else if (mTokenizer[mIndex]->text=='-') {
+            mIndex++;
+            int temp = evaluateMultiplyConstExpr(endIndex,ok);
+            if (!ok)
+                return result;
+            result-=temp;
+        } else
+            break;
+    }
+    return result;
+}
+
+int CppParser::evaluateMultiplyConstExpr(int endIndex, bool &ok)
+{
+    int result = 0;
+    if (mIndex>=endIndex) {
+        ok=false;
+        return 0;
+    }
+    result = evaluateConstExprTerm(endIndex,ok);
+    if (!ok)
+        return result;
+    while (mIndex<endIndex) {
+        if (mTokenizer[mIndex]->text=='*') {
+            mIndex++;
+            int temp = evaluateConstExprTerm(endIndex,ok);
+            if (!ok)
+                return result;
+            result*=temp;
+        } else if (mTokenizer[mIndex]->text=='/') {
+            mIndex++;
+            int temp = evaluateConstExprTerm(endIndex,ok);
+            if (!ok)
+                return result;
+            result/=temp;
+        } else if (mTokenizer[mIndex]->text=='%') {
+            mIndex++;
+            int temp = evaluateConstExprTerm(endIndex,ok);
+            if (!ok)
+                return result;
+            result%=temp;
+        } else
+            break;
+    }
+    return result;
+}
+
+int CppParser::evaluateConstExprTerm(int endIndex, bool &ok)
+{
+    int result = 0;
+    if (mIndex>=endIndex) {
+        ok=false;
+        return 0;
+    }
+    if (mTokenizer[mIndex]->text=="(") {
+        mIndex++;
+        result = evaluateConstExpr(endIndex, ok);
+        if (mIndex>=endIndex || mTokenizer[mIndex]->text!=')')
+            ok=false;
+        mIndex++;
+    } else if (isIdentChar(mTokenizer[mIndex]->text[0])
+               || mTokenizer[mIndex]->text=="::") {
+        QString s = mTokenizer[mIndex]->text;
+        QSet<QString> searched;
+        bool isGlobal = false;
+        mIndex++;
+        if (s=="::") {
+            if (mIndex>=endIndex || !isIdentChar(mTokenizer[mIndex]->text[0])) {
+                ok=false;
+                return result;
+            }
+            isGlobal = true;
+            s+=mTokenizer[mIndex]->text;
+            mIndex++;
+        }
+        while (mIndex+1<endIndex
+               && mTokenizer[mIndex]->text=="::"
+               && isIdentChar(mTokenizer[mIndex+1]->text[0])){
+            s += "::" + mTokenizer[mIndex+1]->text;
+            mIndex+=2;
+        }
+        while (true){
+            //prevent infinite loop
+            if (searched.contains(s)) {
+                ok=false;
+                return result;
+            }
+            searched.insert(s);
+            PStatement statement = doFindStatementOf(
+                        mCurrentFile,s,
+                        isGlobal?PStatement():getCurrentScope());
+
+            if (!statement) {
+                ok=false;
+                return result;
+            }
+            if (statement->kind == StatementKind::Enum) {
+                result = statement->value.toInt(&ok);
+                break;
+            } else if (statement->kind == StatementKind::Alias) {
+                s = statement->value;
+            } else  {
+                ok=false;
+                return result;
+            }
+        }
+    } else {
+        result = evaluateLiteralNumber(endIndex,ok);
+        mIndex++;
+    }
+    return result;
+}
+
+int CppParser::evaluateLiteralNumber(int endIndex, bool &ok)
+{
+    int result = 0;
+    if (mIndex>=endIndex) {
+        ok=false;
+        return 0;
+    }
+    if (mTokenizer[mIndex]->text.startsWith("0x")
+          || mTokenizer[mIndex]->text.startsWith("0X"))
+        result = mTokenizer[mIndex]->text.mid(2).toInt(&ok,16);
+    else if (mTokenizer[mIndex]->text.startsWith("0b")
+          || mTokenizer[mIndex]->text.startsWith("0B"))
+        result = mTokenizer[mIndex]->text.mid(2).toInt(&ok,2);
+    else if (mTokenizer[mIndex]->text.startsWith("0"))
+        result = mTokenizer[mIndex]->text.toInt(&ok,8);
+    else
+        result = mTokenizer[mIndex]->text.toInt(&ok);
     return result;
 }
 
@@ -1724,6 +2048,7 @@ bool CppParser::checkForKeyword(KeywordType& keywordType)
     case KeywordType::For:
     case KeywordType::Public:
     case KeywordType::Private:
+    case KeywordType::Protected:
     case KeywordType::Struct:
     case KeywordType::Enum:
     case KeywordType::Inline:
@@ -1731,23 +2056,25 @@ bool CppParser::checkForKeyword(KeywordType& keywordType)
     case KeywordType::Typedef:
     case KeywordType::Using:
     case KeywordType::Friend:
-    case KeywordType::Protected:
     case KeywordType::None:
     case KeywordType::NotKeyword:
     case KeywordType::DeclType:
     case KeywordType::Operator:
+    case KeywordType::Requires:
+    case KeywordType::Concept:
+    case KeywordType::Extern:
         return false;
     default:
         return true;
     }
 }
 
-bool CppParser::checkForNamespace(KeywordType keywordType)
+bool CppParser::checkForNamespace(KeywordType keywordType, int maxIndex)
 {
-    return (keywordType==KeywordType::Namespace &&(mIndex < mTokenizer.tokenCount()-1))
+    return (keywordType==KeywordType::Namespace &&(mIndex < maxIndex -1))
             || (
                 keywordType==KeywordType::Inline
-                && (mIndex+1 < mTokenizer.tokenCount()-1)
+                && (mIndex+1 < maxIndex-1)
                 &&mTokenizer[mIndex+1]->text == "namespace"
             );
 }
@@ -1757,20 +2084,13 @@ bool CppParser::checkForPreprocessor()
     return (mTokenizer[mIndex]->text.startsWith('#'));
 }
 
-//bool CppParser::checkForLambda()
-//{
-//    return (mIndex+1<mTokenizer.tokenCount()
-//            && mTokenizer[mIndex]->text.startsWith('[')
-//            && mTokenizer[mIndex+1]->text=='(');
-//}
-
 bool CppParser::checkForAccessibilitySpecifiers(KeywordType keywordType)
 {
     return (keywordType == KeywordType::Public || keywordType == KeywordType::Protected
               || keywordType == KeywordType::Private);
 }
 
-bool CppParser::checkForStructs(KeywordType keywordType)
+bool CppParser::checkForStructs(KeywordType keywordType, int maxIndex)
 {
     int dis = 0;
 
@@ -1784,7 +2104,7 @@ bool CppParser::checkForStructs(KeywordType keywordType)
             || keywordType == KeywordType::Public
             || keywordType == KeywordType::Private) {
         dis = 1;
-        if (mIndex+dis>=mTokenizer.tokenCount()) {
+        if (mIndex+dis>=maxIndex) {
             mIndex++;
             return false;
         }
@@ -1794,9 +2114,7 @@ bool CppParser::checkForStructs(KeywordType keywordType)
     }
 
     if (result) {
-        int tokenCount = mTokenizer.tokenCount();
-
-        if (mIndex >= tokenCount - 2 - dis)
+        if (mIndex >= maxIndex - 2 - dis)
             return false;
         if (mTokenizer[mIndex + 2+dis]->text[0] != ';') { // not: class something;
             int i = mIndex+dis +1;
@@ -1806,7 +2124,7 @@ bool CppParser::checkForStructs(KeywordType keywordType)
             //		{"info", 0, 0, 'i'},
             //    ...
             // };
-            while (i < tokenCount) {
+            while (i < maxIndex) {
                 QChar ch = mTokenizer[i]->text.back();
                 if (ch=='{' || ch == ':')
                     break;
@@ -1835,34 +2153,32 @@ bool CppParser::checkForStructs(KeywordType keywordType)
     return result;
 }
 
-bool CppParser::checkForTypedefEnum()
+bool CppParser::checkForTypedefEnum(int maxIndex)
 {
     //we assume that typedef is the current index, so we check the next
     //should call CheckForTypedef first!!!
-    return (mIndex+1 < mTokenizer.tokenCount() ) &&
+    return (mIndex+1 < maxIndex ) &&
             (mTokenizer[mIndex + 1]->text == "enum");
 }
 
-bool CppParser::checkForTypedefStruct()
+bool CppParser::checkForTypedefStruct(int maxIndex)
 {
     //we assume that typedef is the current index, so we check the next
     //should call CheckForTypedef first!!!
-    if (mIndex+1 >= mTokenizer.tokenCount())
+    if (mIndex+1 >= maxIndex)
         return false;
     return (mCppKeywords.value(mTokenizer[mIndex+1]->text,KeywordType::None)==KeywordType::Struct);
 
 }
 
-bool CppParser::checkForUsing(KeywordType keywordType)
+bool CppParser::checkForUsing(KeywordType keywordType, int maxIndex)
 {
-    return keywordType==KeywordType::Using && (mIndex < mTokenizer.tokenCount()-1);
+    return keywordType==KeywordType::Using && (mIndex < maxIndex - 1);
 }
 
-void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
+void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
-
-    if (mIndex+2>=tokenCount) {
+    if (mIndex+2>=maxIndex) {
         mIndex+=2; // let's finish;
         return;
     }
@@ -1879,8 +2195,9 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
     } else {
         if (keywordType == KeywordType::Operator) {
             handleOperatorOverloading("",
-                                  mIndex,
-                                  false);
+                                      mIndex,
+                                      false,
+                                      maxIndex);
             return;
         }
         mIndex++;
@@ -1888,18 +2205,18 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
     //next token must be */&/word/(/{
     if (mTokenizer[mIndex]->text=='(') {
         int indexAfterParentheis=mTokenizer[mIndex]->matchIndex+1;
-        if (indexAfterParentheis>=tokenCount) {
+        if (indexAfterParentheis>=maxIndex) {
             //error
             mIndex=indexAfterParentheis;
         } else if (mTokenizer[indexAfterParentheis]->text=='(') {
             // operator overloading like (operator int)
             if (mTokenizer[mIndex+1]->text=="operator") {
                 mIndex=indexAfterParentheis;
-                handleMethod(StatementKind::skFunction,"",
+                handleMethod(StatementKind::Function,"",
                              mergeArgs(mIndex+1,mTokenizer[mIndex]->matchIndex-1),
-                             indexAfterParentheis,false,false,true);
+                             indexAfterParentheis,false,false,true, maxIndex);
             } else {
-                handleVar(currentText,false,false);
+                handleVar(currentText,false,false, maxIndex);
             }
         } else {
             if (currentText=="operator") {
@@ -1907,7 +2224,7 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
                 handleOperatorOverloading(
                             "",
                             mIndex,
-                            false);
+                            false, maxIndex);
                 return;
             }
             //check for constructor like Foo::Foo()
@@ -1922,10 +2239,10 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
                 if (name.startsWith('~'))
                     name=name.mid(1);
                 if (removeTemplateParams(name)==removeTemplateParams(parentName)) {
-                    handleMethod( (isDestructor?StatementKind::skDestructor:StatementKind::skConstructor),
+                    handleMethod( (isDestructor?StatementKind::Destructor:StatementKind::Constructor),
                                  "",
                                  currentText,
-                                 mIndex,false,false);
+                                 mIndex,false,false, false, maxIndex);
                     return;
                 }
             }
@@ -1934,19 +2251,19 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
             //   Foo();
             // };
             PStatement scope=getCurrentScope();
-            if (scope && scope->kind==StatementKind::skClass
+            if (scope && scope->kind==StatementKind::Class
                     && removeTemplateParams(scope->command) == removeTemplateParams(currentText)) {
-                handleMethod(StatementKind::skConstructor,"",
+                handleMethod(StatementKind::Constructor,"",
                              currentText,
-                             mIndex,false,false);
+                             mIndex,false,false, false, maxIndex);
                 return;
             }
 
             // function call, skip it
-            mIndex=moveToEndOfStatement(mIndex,true);
+            mIndex=moveToEndOfStatement(mIndex,true, maxIndex);
         }
-    } else if (mTokenizer[mIndex]->text.startsWith('*')
-               || mTokenizer[mIndex]->text.startsWith('&')
+    } else if (mTokenizer[mIndex]->text == "*"
+               || mTokenizer[mIndex]->text == "&"
                || mTokenizer[mIndex]->text=="::"
                || tokenIsIdentifier(mTokenizer[mIndex]->text)
                    ) {
@@ -1975,22 +2292,40 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
         }
 
         // Gather data for the string parts
-        while (mIndex+1 < tokenCount) {
+        while (mIndex+1 < maxIndex) {
             if (mTokenizer[mIndex]->text=="operator") {
                 handleOperatorOverloading(sType,
                                       //sName,
                                       mIndex,
-                                      isStatic);
+                                      isStatic, maxIndex);
                 return;
             } else if (mTokenizer[mIndex + 1]->text == '(') {
-                if (mIndex+2<tokenCount && mTokenizer[mIndex+2]->text == '*') {
+#ifdef ENABLE_SDCC
+                if (mLanguage==ParserLanguage::SDCC && mTokenizer[mIndex]->text=="__at") {
+                    if (!sName.isEmpty()) {
+                        sType = sType+" "+sName;
+                        sName = "";
+                    }
+                    sType+=" __at";
+                    mIndex++;
+                    int idx= mTokenizer[mIndex]->matchIndex;
+                    if (idx<maxIndex) {
+                        for (int i=mIndex;i<=idx;i++) {
+                            sType+=mTokenizer[i]->text;
+                        }
+                    }
+                    mIndex=idx+1;
+                    continue;
+                }
+#endif
+                if (mIndex+2<maxIndex && mTokenizer[mIndex+2]->text == '*') {
                     //foo(*blabla), it's a function pointer var
-                    handleVar(sType+" "+sName,isExtern,isStatic);
+                    handleVar(sType+" "+sName,isExtern,isStatic, maxIndex);
                     return;
                 }
 
                 int indexAfter=mTokenizer[mIndex + 1]->matchIndex+1;
-                if (indexAfter>=tokenCount) {
+                if (indexAfter>=maxIndex) {
                     //error
                     mIndex=indexAfter;
                     return;
@@ -1998,37 +2333,38 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
                 //if it's like: foo(...)(...)
                 if (mTokenizer[indexAfter]->text=='(') {
                     //foo(...)(...), it's a function pointer var
-                    handleVar(sType+" "+sName,isExtern,isStatic);
+                    handleVar(sType+" "+sName,isExtern,isStatic, maxIndex);
                     //Won't implement: ignore function decl like int (text)(int x) { };
                     return;
                 }
+
                 //it's not a function define
                 if (mTokenizer[indexAfter]->text == ',') {
                     // var decl with init
-                    handleVar(sType+" "+sName,isExtern,isStatic);
+                    handleVar(sType+" "+sName,isExtern,isStatic, maxIndex);
                     return;
                 }
-                if (mTokenizer[indexAfter]->text[0] == ';' && sType!="void") {
+                if (sType!="void") {
                     //function can only be defined in global/namespaces/classes
                     PStatement currentScope=getCurrentScope();
                     if (currentScope) {
                         //in namespace, it might be function or object initilization
-                        if (currentScope->kind == StatementKind::skNamespace) {
+                        if (currentScope->kind == StatementKind::Namespace) {
                             if (isNotFuncArgs(mIndex + 1)) {
                                 // var decl with init
-                                handleVar(sType+" "+sName,isExtern,isStatic);
+                                handleVar(sType+" "+sName,isExtern,isStatic, maxIndex);
                                 return;
                             }
-                        } else if (currentScope->kind != StatementKind::skClass) {
+                        } else if (currentScope->kind != StatementKind::Class) {
                             //not in class, it can't be a valid function definition
                             // var decl with init
-                            handleVar(sType+" "+sName,isExtern,isStatic);
+                            handleVar(sType+" "+sName,isExtern,isStatic, maxIndex);
                             return;
                         }
                         //variable can't be initialized in class definition, it must be a function
                     } else if (isNotFuncArgs(mIndex + 1)){
                         // var decl with init
-                        handleVar(sType+" "+sName,isExtern,isStatic);
+                        handleVar(sType+" "+sName,isExtern,isStatic, maxIndex);
                         return;
                     }
                 }
@@ -2048,16 +2384,16 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
                 mIndex++;
 
                 if (isDestructor)
-                    handleMethod(StatementKind::skDestructor,sType,
-                                 sName,mIndex,false,isFriend);
+                    handleMethod(StatementKind::Destructor,sType,
+                                 sName,mIndex,false,isFriend, false, maxIndex);
                 else {
                     sType=sType.trimmed();
                     if (sType.isEmpty())
-                        handleMethod(StatementKind::skConstructor,sType,
-                                 sName,mIndex,false,isFriend);
+                        handleMethod(StatementKind::Constructor,sType,
+                                 sName,mIndex,false,isFriend, false, maxIndex);
                     else
-                        handleMethod(StatementKind::skFunction,sType,
-                             sName,mIndex,isStatic,isFriend);
+                        handleMethod(StatementKind::Function,sType,
+                             sName,mIndex,isStatic,isFriend, false, maxIndex);
                 }
 
                 return;
@@ -2067,7 +2403,12 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
                        ||mTokenizer[mIndex + 1]->text == ':'
                        ||mTokenizer[mIndex + 1]->text == '{'
                        || mTokenizer[mIndex + 1]->text == '=') {
-                handleVar(sType+" "+sName,isExtern,isStatic);
+                if (mTokenizer[mIndex]->text.startsWith("[")
+                        && AutoTypes.contains(sType)) {
+                    handleStructredBinding(sType,maxIndex);
+                    return;
+                }
+                handleVar(sType+" "+sName,isExtern,isStatic, maxIndex);
                 return;
             } else if ( mTokenizer[mIndex + 1]->text == "::") {
                 sName = sName + mTokenizer[mIndex]->text+ "::";
@@ -2077,6 +2418,10 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
                 mIndex++;
             } else {
                 QString s = mTokenizer[mIndex]->text;
+                if (!isWordChar(s.front())) {
+                    mIndex = indexOfNextPeriodOrSemicolon(mIndex, maxIndex);
+                    return;
+                }
                 if (sName.endsWith("::")) {
                     sName+=s;
                 } else {
@@ -2090,8 +2435,9 @@ void CppParser::checkAndHandleMethodOrVar(KeywordType keywordType)
                         isFriend = true;
                     else if (s == "extern")
                         isExtern = true;
-                    if (!s.isEmpty() && !(s=="extern"))
+                    if (!s.isEmpty() && !(s=="extern")) {
                         sType = sType + ' '+ s;
+                    }
                 }
                 mIndex++;
             }
@@ -2147,7 +2493,7 @@ QString CppParser::doFindTemplateParamOf(const QString &fileName, const QString 
         i=getTemplateParamStart(s,i,index);
         int t=getTemplateParamEnd(s,i);
         //qDebug()<<index<<s<<s.mid(i,t-i)<<i<<t;
-        return s.mid(i,t-i);
+        return s.mid(i,t-i).replace(QRegularExpression("\\s+"),"");
     }
     int position = s.length()-1;
     while ((position >= 0) && (s[position] == '*'
@@ -2163,24 +2509,10 @@ QString CppParser::doFindTemplateParamOf(const QString &fileName, const QString 
     return getTemplateParam(statement,fileName, phrase,index, currentScope);
 }
 
-int CppParser::getCurrentBlockEndSkip() const
-{
-    if (mBlockEndSkips.isEmpty())
-        return mTokenizer.tokenCount()+1;
-    return mBlockEndSkips.back();
-}
-
-int CppParser::getCurrentBlockBeginSkip() const
-{
-    if (mBlockBeginSkips.isEmpty())
-        return mTokenizer.tokenCount()+1;
-    return mBlockBeginSkips.back();
-}
-
-int CppParser::getCurrentInlineNamespaceEndSkip() const
+int CppParser::getCurrentInlineNamespaceEndSkip(int endIndex) const
 {
     if (mInlineNamespaceEndSkips.isEmpty())
-        return mTokenizer.tokenCount()+1;
+        return endIndex;
     return mInlineNamespaceEndSkips.back();
 }
 
@@ -2233,9 +2565,9 @@ QString CppParser::getFullStatementName(const QString &command, const PStatement
     PStatement scopeStatement=parent;
     while (scopeStatement && !isNamedScope(scopeStatement->kind))
         scopeStatement = scopeStatement->parentScope.lock();
-    if (scopeStatement)
-        return scopeStatement->fullName + "::" + command;
-    else
+    if (scopeStatement) {
+        return calcFullname(scopeStatement->fullName, command);
+    } else
         return command;
 }
 
@@ -2248,7 +2580,7 @@ PStatement CppParser::getIncompleteClass(const QString &command, const PStatemen
         s.truncate(p);
     }
     PStatement result = doFindStatementOf(mCurrentFile,s,parentScope);
-    if (result && result->kind!=StatementKind::skClass)
+    if (result && result->kind!=StatementKind::Class)
         return PStatement();
     return result;
 }
@@ -2259,9 +2591,9 @@ StatementScope CppParser::getScope()
     PStatement currentScope = getCurrentScope();
 
     // Invalid class or namespace/extern
-    if (!currentScope || (currentScope->kind == StatementKind::skNamespace))
+    if (!currentScope || (currentScope->kind == StatementKind::Namespace))
         return StatementScope::Global;
-    else if (currentScope->kind == StatementKind::skClass)
+    else if (currentScope->kind == StatementKind::Class)
         return StatementScope::ClassLocal;
     else
         return StatementScope::Local;
@@ -2278,18 +2610,20 @@ PStatement CppParser::getTypeDef(const PStatement& statement,
     if (!statement) {
         return PStatement();
     }
-    if (statement->kind == StatementKind::skClass
-            || statement->kind == StatementKind::skEnumType
-            || statement->kind == StatementKind::skEnumClassType) {
+    if (statement->kind == StatementKind::Class
+            || statement->kind == StatementKind::EnumType
+            || statement->kind == StatementKind::EnumClassType) {
         return statement;
-    } else if (statement->kind == StatementKind::skTypedef) {
+    } else if (statement->kind == StatementKind::Constructor) {
+        return statement->parentScope.lock();
+    } else if (statement->kind == StatementKind::Typedef) {
         if (statement->type == aType) // prevent infinite loop
             return statement;
         PStatement result = doFindTypeDefinitionOf(fileName,statement->type, statement->parentScope.lock());
         if (!result) // found end of typedef trail, return result
             return statement;
         return result;
-    } else if (statement->kind == StatementKind::skAlias) {
+    } else if (statement->kind == StatementKind::Alias) {
         PStatement result = doFindAliasedStatement(statement);
         if (!result) // found end of typedef trail, return result
             return statement;
@@ -2298,85 +2632,97 @@ PStatement CppParser::getTypeDef(const PStatement& statement,
         return PStatement();
 }
 
-void CppParser::handleCatchBlock()
+void CppParser::doAddVar(const QString &name, const QString &type, bool isConst, const QString& suffix)
 {
-    int tokenCount = mTokenizer.tokenCount();
-    int startLine= mTokenizer[mIndex]->line;
-    mIndex++; // skip for/catch;
-    if (!((mIndex < tokenCount) && (mTokenizer[mIndex]->text.startsWith('('))))
+    if (!isIdentifier(name))
         return;
-    //skip params
-    int i2=mTokenizer[mIndex]->matchIndex+1;
-    if (i2>=tokenCount)
+    if (type.isEmpty())
         return;
-    if (mTokenizer[i2]->text.startsWith('{')) {
-        mBlockBeginSkips.append(i2);
-        int i = indexOfMatchingBrace(i2);
-        mBlockEndSkips.append(i);
-    } else {
-        int i=indexOfNextSemicolon(i2);
-        mBlockEndSkips.append(i);
-    }
-    // add a block
-    PStatement block = addStatement(
+    QString realType = type;
+    if (isConst)
+        realType = "const "+realType;
+    if (!suffix.isEmpty())
+        realType += " "+suffix;
+    addChildStatement(
                 getCurrentScope(),
                 mCurrentFile,
+                realType,
+                name,
                 "",
                 "",
                 "",
-                "",
-                "",
-                startLine,
-                StatementKind::skBlock,
+                mTokenizer[mIndex]->line,
+                StatementKind::Variable,
                 getScope(),
                 mCurrentMemberAccessibility,
-                StatementProperty::spHasDefinition);
-    addSoloScopeLevel(block,startLine);
-    scanMethodArgs(block,mIndex);
-    mIndex=mTokenizer[mIndex]->matchIndex+1;
+                StatementProperty::HasDefinition);
 }
 
-void CppParser::handleEnum(bool isTypedef)
+void CppParser::handleConcept(int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
+    mIndex++; // skip 'concept';
+    // just skip it;
+    mIndex = indexOfNextSemicolonOrLeftBrace(mIndex, maxIndex);
+    if (mIndex<maxIndex) {
+        if (mTokenizer[mIndex]->text=='{')
+            mIndex = mTokenizer[mIndex]->matchIndex+1; // skip '}'
+        else
+            mIndex++; // skip ;
+    }
+}
+
+void CppParser::handleEnum(bool isTypedef, int maxIndex)
+{
     QString enumName = "";
     bool isEnumClass = false;
     int startLine = mTokenizer[mIndex]->line;
     mIndex++; //skip 'enum'
 
-    if (mIndex < tokenCount && mTokenizer[mIndex]->text == "class") {
+    if (mIndex < maxIndex &&
+            (mTokenizer[mIndex]->text == "class"
+             || mTokenizer[mIndex]->text == "struct")) {
         //enum class
         isEnumClass = true;
         mIndex++; //skip class
-
     }
     bool isAdhocVar=false;
-    int endIndex=-1;
-    if ((mIndex< tokenCount) && mTokenizer[mIndex]->text.startsWith('{')) { // enum {...} NAME
+    bool isNonameEnum=false;
+    int definitionEndIndex=-1;
+    if ((mIndex< maxIndex) && mTokenizer[mIndex]->text.startsWith('{')) { // enum {...} NAME
         // Skip to the closing brace
         int i = indexOfMatchingBrace(mIndex);
         // Have we found the name?
-        if (i + 1 < tokenCount) {
+        if (i + 1 < maxIndex) {
             enumName = mTokenizer[i + 1]->text.trimmed();
             if (!isIdentifierOrPointer(enumName)) {
-                //not a valid enum, skip to j
-                mIndex=indexOfNextSemicolon(i+1)+1;
-                return;
+                if (isTypedef || isEnumClass) {
+                    //not a valid enum, skip to j
+                    mIndex=indexOfNextSemicolon(i+1, maxIndex)+1;
+                    return;
+                } else
+                    isNonameEnum = true;
             }
             if (!isTypedef) {
                 //it's an ad-hoc enum var define;
                 if (isEnumClass) {
                     //Enum class can't add hoc, just skip to ;
-                    mIndex=indexOfNextSemicolon(i+1)+1;
+                    mIndex=indexOfNextSemicolon(i+1, maxIndex)+1;
                     return;
                 }
-                enumName = "__enum__"+enumName+"__";
+                enumName = "___enum___"+enumName+"__";
                 isAdhocVar=true;
             }
         }
-        endIndex=i+1;
-    } else if (mIndex+1< tokenCount && mTokenizer[mIndex+1]->text.startsWith('{')){ // enum NAME {...};
+        definitionEndIndex=i+1;
+    } else if (mIndex+1< maxIndex && mTokenizer[mIndex+1]->text.startsWith('{')){ // enum NAME {...};
         enumName = mTokenizer[mIndex]->text;
+        mIndex++;
+    } else if (mIndex+1< maxIndex && mTokenizer[mIndex+1]->text.startsWith(':')){ // enum NAME:int {...};
+        enumName = mTokenizer[mIndex]->text;
+        //skip :
+        mIndex = indexOfNextLeftBrace(mIndex, maxIndex);
+        if (mIndex>maxIndex)
+            return;
     } else {
         // enum NAME blahblah
         // it's an old c-style enum variable definition
@@ -2385,41 +2731,44 @@ void CppParser::handleEnum(bool isTypedef)
 
     // Add statement for enum name too
     PStatement enumStatement;
-    if (isEnumClass) {
-        enumStatement=addStatement(
-                    getCurrentScope(),
-                    mCurrentFile,
-                    "enum class",
-                    enumName,
-                    "",
-                    "",
-                    "",
-                    startLine,
-                    StatementKind::skEnumClassType,
-                    getScope(),
-                    mCurrentMemberAccessibility,
-                    StatementProperty::spHasDefinition);
-    } else {
-        enumStatement=addStatement(
-                    getCurrentScope(),
-                    mCurrentFile,
-                    "enum",
-                    enumName,
-                    "",
-                    "",
-                    "",
-                    startLine,
-                    StatementKind::skEnumType,
-                    getScope(),
-                    mCurrentMemberAccessibility,
-                    StatementProperty::spHasDefinition);
+    if (!isNonameEnum) {
+        if (isEnumClass) {
+            enumStatement=addStatement(
+                        getCurrentScope(),
+                        mCurrentFile,
+                        "enum class",
+                        enumName,
+                        "",
+                        "",
+                        "",
+                        startLine,
+                        StatementKind::EnumClassType,
+                        getScope(),
+                        mCurrentMemberAccessibility,
+                        StatementProperty::HasDefinition);
+        } else {
+            enumStatement=addStatement(
+                        getCurrentScope(),
+                        mCurrentFile,
+                        "enum",
+                        enumName,
+                        "",
+                        "",
+                        "",
+                        startLine,
+                        StatementKind::EnumType,
+                        getScope(),
+                        mCurrentMemberAccessibility,
+                        isAdhocVar?(StatementProperty::HasDefinition|StatementProperty::DummyStatement)
+                            :StatementProperty::HasDefinition );
+        }
     }
     if (isAdhocVar) {
         //Ad-hoc var definition
         // Skip to the closing brace
         int i = indexOfMatchingBrace(mIndex)+1;
         QString typeSuffix="";
-        while (i<tokenCount) {
+        while (i<maxIndex) {
             QString name=mTokenizer[i]->text;
             if (isIdentifierOrPointer(name)) {
                 QString suffix;
@@ -2435,17 +2784,17 @@ void CppParser::handleEnum(bool isTypedef)
                                 "",
                                 "",
                                 mTokenizer[i]->line,
-                                StatementKind::skVariable,
+                                StatementKind::Variable,
                                 getScope(),
                                 mCurrentMemberAccessibility,
-                                StatementProperty::spHasDefinition);
+                                StatementProperty::HasDefinition);
                 }
             } else if (name!=',') {
                 break;
             }
             i++;
         }
-        endIndex=indexOfNextSemicolon(i);
+        definitionEndIndex=indexOfNextSemicolon(i, maxIndex);
     }
 
 
@@ -2453,125 +2802,108 @@ void CppParser::handleEnum(bool isTypedef)
     mIndex++;
 
     // Call every member "enum NAME ITEMNAME"
-    QString lastType("enum");
-    if (!enumName.isEmpty())
-        lastType += ' ' + enumName;
+    QString lastType;
+    if (enumStatement && !isAdhocVar)
+        lastType = "enum " + enumName;
     QString cmd;
     QString args;
-    if (mTokenizer[mIndex]->text!='}') {
-        while ((mIndex < tokenCount) &&
-                         mTokenizer[mIndex]->text!='}') {
-            if (mTokenizer[mIndex]->text=="=") {
-                mIndex=indexOfNextPeriodOrSemicolon(mIndex);
-                continue;
-            } else if (tokenIsIdentifier(mTokenizer[mIndex]->text)) {
-                cmd = mTokenizer[mIndex]->text;
-                args = "";
-                if (isEnumClass) {
-                    if (enumStatement) {
-                        addStatement(
-                          enumStatement,
-                          mCurrentFile,
-                          lastType,
-                          cmd,
-                          args,
-                          "",
-                          "",
-                          mTokenizer[mIndex]->line,
-                          StatementKind::skEnum,
-                          getScope(),
-                          mCurrentMemberAccessibility,
-                          StatementProperty::spHasDefinition);
-                    }
-                } else {
-                    if (enumStatement) {
-                        addStatement(
-                          enumStatement,
-                          mCurrentFile,
-                          lastType,
-                          cmd,
-                          args,
-                          "",
-                          "",
-                          mTokenizer[mIndex]->line,
-                          StatementKind::skEnum,
-                          getScope(),
-                          mCurrentMemberAccessibility,
-                          StatementProperty::spHasDefinition);
-                    }
-                    addStatement(
-                                getCurrentScope(),
-                                mCurrentFile,
-                                lastType,
-                                cmd,
-                                "",
-                                "",
-                                "",
-                                mTokenizer[mIndex]->line,
-                                StatementKind::skEnum,
-                                getScope(),
-                                mCurrentMemberAccessibility,
-                                StatementProperty::spHasDefinition);
+    int value=0;
+    bool canCalcValue=true;
+    while ((mIndex < maxIndex) &&
+                     mTokenizer[mIndex]->text!='}') {
+        if (tokenIsIdentifier(mTokenizer[mIndex]->text)) {
+            cmd = mTokenizer[mIndex]->text;
+            args = "";
+            if (mIndex+1<maxIndex &&
+                    mTokenizer[mIndex+1]->text=="=") {
+                mIndex+=2;
+                if (mIndex<maxIndex) {
+                    int tempIndex = indexOfNextPeriodOrSemicolon(mIndex, maxIndex);
+                    value = evaluateConstExpr(tempIndex,canCalcValue);
+                    mIndex = tempIndex - 1;
                 }
             }
-            mIndex ++ ;
+            if (isEnumClass) {
+                if (enumStatement) {
+                    addStatement(
+                      enumStatement,
+                      mCurrentFile,
+                      lastType,
+                      cmd,
+                      args,
+                      "",
+                      canCalcValue?QString("%1").arg(value):"",
+                      mTokenizer[mIndex]->line,
+                      StatementKind::Enum,
+                      getScope(),
+                      mCurrentMemberAccessibility,
+                      StatementProperty::HasDefinition);
+                }
+            } else {
+                QString strValue=canCalcValue?QString("%1").arg(value):"";
+                if (enumStatement) {
+                    addStatement(
+                      enumStatement,
+                      mCurrentFile,
+                      lastType,
+                      cmd,
+                      args,
+                      "",
+                      strValue,
+                      mTokenizer[mIndex]->line,
+                      StatementKind::Enum,
+                      getScope(),
+                      mCurrentMemberAccessibility,
+                      StatementProperty::HasDefinition);
+                }
+                addStatement(
+                            getCurrentScope(),
+                            mCurrentFile,
+                            lastType,
+                            cmd,
+                            "",
+                            "",
+                            strValue,
+                            mTokenizer[mIndex]->line,
+                            StatementKind::Enum,
+                            getScope(),
+                            mCurrentMemberAccessibility,
+                            StatementProperty::HasDefinition);
+            }
+            value++;
         }
+        mIndex ++ ;
     }
-    if (mIndex<endIndex)
-        mIndex=endIndex;
-    mIndex = indexOfNextSemicolon(mIndex)+1;
+    if (mIndex<definitionEndIndex)
+        mIndex=definitionEndIndex;
+    mIndex = indexOfNextSemicolon(mIndex, maxIndex)+1;
 }
 
-void CppParser::handleForBlock()
+void CppParser::handleForBlock(int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
-
-    int startLine = mTokenizer[mIndex]->line;
     mIndex++; // skip for/catch;
-    if (mIndex >= tokenCount)
+    if (mIndex >= maxIndex)
         return;
-    if (mTokenizer[mIndex]->text!="(")
+    if (mTokenizer[mIndex]->text!='(')
         return;
-    int i=indexOfNextSemicolon(mIndex);
-    int i2 = i+1; //skip over ';' (tokenizer have change for(;;) to for(;)
-
-    // for(int x:vec)
-    if (i2 > mTokenizer[mIndex]->matchIndex)
-        i2 = mTokenizer[mIndex]->matchIndex+1;
-
-    if (i2>=tokenCount)
+    int i=mTokenizer[mIndex]->matchIndex; //")"
+    int i2 = i+1;
+    if (i2>=maxIndex)
         return;
-    if (mTokenizer[i2]->text.startsWith('{')) {
-        mBlockBeginSkips.append(i2);
-        i=indexOfMatchingBrace(i2);
-// tokenizer will handle unbalanced braces, no need check here
-//        if (i==i2)
-//            mBlockEndSkips.append(mTokenizer.tokenCount());
-//        else
-        mBlockEndSkips.append(i);
+    if (mTokenizer[i2]->text=='{') {
+        mTokenizer[mIndex]->text="{";
+        mTokenizer[mIndex]->matchIndex = mTokenizer[i2]->matchIndex;
+        mTokenizer[mTokenizer[mIndex]->matchIndex]->matchIndex = mIndex;
+        mTokenizer[i]->text=";";
+        mTokenizer[i2]->text=";";
     } else {
-        i=indexOfNextSemicolon(i2);
-        mBlockEndSkips.append(i);
+        mTokenizer[mIndex]->text=";";
+        mTokenizer[i]->text=";";
+        mIndex++; //skip ';'
     }
-    // add a block
-    PStatement block = addStatement(
-                getCurrentScope(),
-                mCurrentFile,
-                "",
-                "",
-                "",
-                "",
-                "",
-                startLine,
-                StatementKind::skBlock,
-                getScope(),
-                mCurrentMemberAccessibility,
-                StatementProperty::spHasDefinition);
-
-    addSoloScopeLevel(block,startLine);
 }
 
-void CppParser::handleKeyword(KeywordType skipType)
+void CppParser::handleKeyword(KeywordType skipType, int maxIndex)
 {
     // Skip
     switch (skipType) {
@@ -2581,19 +2913,19 @@ void CppParser::handleKeyword(KeywordType skipType)
         break;
     case KeywordType::SkipNextSemicolon:
         // Skip to ; and over it
-        skipNextSemicolon(mIndex);
+        skipNextSemicolon(mIndex, maxIndex);
         break;
     case KeywordType::SkipNextColon:
         // Skip to : and over it
-        mIndex = indexOfNextColon(mIndex)+1;
+        mIndex = indexOfNextColon(mIndex, maxIndex)+1;
         break;
     case KeywordType::SkipNextParenthesis:
         // skip pass ()
-        skipParenthesis(mIndex);
+        skipParenthesis(mIndex, maxIndex);
         break;
     case KeywordType::MoveToLeftBrace:
         // Skip to {
-        mIndex = indexOfNextLeftBrace(mIndex);
+        mIndex = indexOfNextLeftBrace(mIndex, maxIndex);
         break;
 //    case KeywordType::MoveToRightBrace:
 //        // Skip pass {}
@@ -2604,21 +2936,26 @@ void CppParser::handleKeyword(KeywordType skipType)
     }
 }
 
-void CppParser::handleLambda(int index, int endIndex)
+void CppParser::handleLambda(int index, int maxIndex)
 {
     Q_ASSERT(mTokenizer[index]->text.startsWith('['));
+    QSet<QString> captures = parseLambdaCaptures(index);
     int startLine=mTokenizer[index]->line;
     int argStart=index+1;
-    if (mTokenizer[argStart]->text!='(')
+    int argEnd, bodyStart;
+    if (mTokenizer[argStart]->text == '(' ) {
+        argEnd = mTokenizer[argStart]->matchIndex;
+        bodyStart=indexOfNextLeftBrace(argEnd+1, maxIndex);
+        if (bodyStart>=maxIndex) {
+            return;
+        }
+    } else if (mTokenizer[argStart]->text == '{') {
+        argEnd = argStart;
+        bodyStart = argStart;
+    } else
         return;
-    int argEnd= mTokenizer[argStart]->matchIndex;
-    //TODO: parse captures
-    int bodyStart=indexOfNextLeftBrace(argEnd+1);
-    if (bodyStart>=endIndex) {
-        return;
-    }
     int bodyEnd = mTokenizer[bodyStart]->matchIndex;
-    if (bodyEnd>endIndex) {
+    if (bodyEnd>maxIndex) {
         return;
     }
     PStatement lambdaBlock = addStatement(
@@ -2630,112 +2967,29 @@ void CppParser::handleLambda(int index, int endIndex)
                 "",
                 "",
                 startLine,
-                StatementKind::skBlock,
+                StatementKind::Lambda,
                 StatementScope::Local,
                 StatementAccessibility::None,
-                StatementProperty::spHasDefinition);
-    scanMethodArgs(lambdaBlock,argStart);
+                StatementProperty::HasDefinition);
+    lambdaBlock->lambdaCaptures = captures;
+    if (argEnd > argStart)
+        scanMethodArgs(lambdaBlock,argStart);
     addSoloScopeLevel(lambdaBlock,mTokenizer[bodyStart]->line);
-    int i=bodyStart+1; // start after '{';
-    while (i+2<bodyEnd) {
-        if (tokenIsTypeOrNonKeyword(mTokenizer[i]->text)
-                && !mTokenizer[i]->text.endsWith('.')
-                && !mTokenizer[i]->text.endsWith("->")
-                && (mTokenizer[i+1]->text.startsWith('*')
-                 || mTokenizer[i+1]->text.startsWith('&')
-                 || tokenIsTypeOrNonKeyword(mTokenizer[i+1]->text)))
-        {
-            QString sType;
-            QString sName;
-            while (i+1<bodyEnd) {
-                if (mTokenizer[i+1]->text==':'
-                        || mTokenizer[i+1]->text=='('
-                        || mTokenizer[i+1]->text=='='
-                        || mTokenizer[i+1]->text==';'
-                        || mTokenizer[i+1]->text==','
-                        || mTokenizer[i+1]->text=='{'
-                        )
-                    break;
-                else {
-                    if (!sType.isEmpty())
-                        sType+=' ';
-                    sType+=mTokenizer[i]->text;
-                }
-                i++;
-            }
-            QString tempType;
-            while (i<bodyEnd) {
-                // Skip bit identifiers,
-                // e.g.:
-                // handle
-                // unsigned short bAppReturnCode:8,reserved:6,fBusy:1,fAck:1
-                // as
-                // unsigned short bAppReturnCode,reserved,fBusy,fAck
-                if (mTokenizer[i]->text.front() == ':') {
-                    while ( (i < bodyEnd)
-                            && !(
-                                mTokenizer[i]->text==','
-                                || mTokenizer[i]->text==';'
-                                || mTokenizer[i]->text=='='
-                                ))
-                        i++;
-                } else if (mTokenizer[i]->text==';') {
-                    break;
-                } else if (isIdentChar(mTokenizer[i]->text[0])) {
-                    QString cmd=mTokenizer[i]->text;
-                    if (cmd=="const") {
-                        tempType="const";
-                    } else {
-                        QString suffix;
-                        QString args;
-                        parseCommandTypeAndArgs(cmd,suffix,args);
-                        if (!cmd.isEmpty()) {
-                            addChildStatement(
-                                        lambdaBlock,
-                                        mCurrentFile,
-                                        (sType+' '+tempType+suffix).trimmed(),
-                                        cmd,
-                                        args,
-                                        "",
-                                        "",
-                                        mTokenizer[mIndex]->line,
-                                        StatementKind::skVariable,
-                                        getScope(),
-                                        mCurrentMemberAccessibility,
-                                        StatementProperty::spHasDefinition); // TODO: not supported to pass list
-                            tempType="";
-                        }
-                    }
-                    i++;
-                } else if (mTokenizer[i]->text=='(') {
-                    i=mTokenizer[i]->matchIndex+1;
-                } else if (mTokenizer[i]->text.endsWith('=')) {
-                    i = skipAssignment(i, bodyEnd);
-                } else if (mTokenizer[i]->text=='{') {
-                    tempType="";
-                    i=mTokenizer[i]->matchIndex+1;
-                } else {
-                    tempType="";
-                    i++;
-                }
-
-            }
-        }
-        i=moveToEndOfStatement(i, true, bodyEnd);
-    }
-    removeScopeLevel(mTokenizer[bodyEnd]->line);
+    int oldIndex = mIndex;
+    mIndex = bodyStart+1;
+    while (handleStatement(bodyEnd));
+    Q_ASSERT(mIndex == bodyEnd);
+    mIndex = oldIndex;
+    removeScopeLevel(mTokenizer[bodyEnd]->line, maxIndex);
 }
 
 void CppParser::handleOperatorOverloading(const QString &sType,
-                                          //const QString &prefix,
-                                          int operatorTokenIndex, bool isStatic)
+                                          int operatorTokenIndex, bool isStatic, int maxIndex)
 {
     //operatorTokenIndex is the token index of "operator"
-    int tokenCount = mTokenizer.tokenCount();
-
     int index=operatorTokenIndex+1;
     QString op="";
-    if (index>=tokenCount) {
+    if (index>=maxIndex) {
         mIndex=index;
         return;
     }
@@ -2746,7 +3000,7 @@ void CppParser::handleOperatorOverloading(const QString &sType,
                || mTokenizer[index]->text=="delete") {
             op=mTokenizer[index]->text;
             index++;
-            if (index<tokenCount
+            if (index<maxIndex
                     && mTokenizer[index]->text=="[]") {
                 op+="[]";
                 index++;
@@ -2754,47 +3008,48 @@ void CppParser::handleOperatorOverloading(const QString &sType,
     } else {
         op=mTokenizer[index]->text;
         index++;
-        while (index<mTokenizer.tokenCount()
+        while (index<maxIndex
                && mTokenizer[index]->text != "(")
             index++;
     }
-    while (index<tokenCount
+    while (index<maxIndex
            && mTokenizer[index]->text == ")")
         index++;
-    if (index>=tokenCount
+    if (index>=maxIndex
             || mTokenizer[index]->text!="(") {
         mIndex=index;
         return;
     }
     Q_ASSERT(!op.isEmpty());
     if (isIdentChar(op.front())) {
-        handleMethod(StatementKind::skFunction,
+        handleMethod(StatementKind::Function,
                      sType+" "+op,
                      "operator("+op+")",
                      index,
                      isStatic,
                      false,
-                     true);
+                     true,
+                     maxIndex);
     } else {
-        handleMethod(StatementKind::skFunction,
+        handleMethod(StatementKind::Function,
                  sType,
                  "operator"+op,
                  index,
                  isStatic,
                  false,
-                 true);
+                 true,
+                 maxIndex);
     }
 }
 
-void CppParser::handleMethod(StatementKind functionKind,const QString &sType, const QString &sName, int argStart, bool isStatic, bool isFriend,bool isOperatorOverload)
+void CppParser::handleMethod(StatementKind functionKind,const QString &sType, const QString &sName, int argStart, bool isStatic, bool isFriend,bool isOperatorOverload, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
     bool isValid = true;
     bool isDeclaration = false; // assume it's not a prototype
     int startLine = mTokenizer[mIndex]->line;
     int argEnd = mTokenizer[argStart]->matchIndex;
 
-    if (mIndex >= tokenCount) // not finished define, just skip it;
+    if (mIndex >= maxIndex) // not finished define, just skip it;
         return;
 
     PStatement scopeStatement = getCurrentScope();
@@ -2802,7 +3057,7 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
     //find start of the function body;
     bool foundColon=false;
     mIndex=argEnd+1;
-    while ((mIndex < tokenCount) && !isblockChar(mTokenizer[mIndex]->text.front())) {
+    while ((mIndex < maxIndex) && !isblockChar(mTokenizer[mIndex]->text.front())) {
         if (mTokenizer[mIndex]->text=='(') {
             mIndex=mTokenizer[mIndex]->matchIndex+1;
         }else if (mTokenizer[mIndex]->text==':') {
@@ -2813,9 +3068,9 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
     }
     if (foundColon) {
         mIndex++;
-        while ((mIndex < tokenCount) && !isblockChar(mTokenizer[mIndex]->text.front())) {
+        while ((mIndex < maxIndex) && !isblockChar(mTokenizer[mIndex]->text.front())) {
             if (isWordChar(mTokenizer[mIndex]->text[0])
-                    && mIndex+1<mTokenizer.tokenCount()
+                    && mIndex+1< maxIndex
                     && mTokenizer[mIndex+1]->text=='{') {
                 //skip parent {}intializer
                 mIndex=mTokenizer[mIndex+1]->matchIndex+1;
@@ -2826,7 +3081,7 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
         }
     }
 
-    if (mIndex>=tokenCount)
+    if (mIndex>=maxIndex)
         return;
 
     // Check if this is a prototype
@@ -2859,9 +3114,6 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
         } else
             scopelessName = sName;
 
-//        qDebug()<<sName<<scopelessName<<parentClassName;
-//        if (scopeStatement)
-//            qDebug()<<"--"<<scopeStatement->fullName;
         // For function definitions, the parent class is given. Only use that as a parent
         if (!isDeclaration) {
             functionStatement=addStatement(
@@ -2877,12 +3129,12 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
                         functionKind,
                         getScope(),
                         mCurrentMemberAccessibility,
-                        StatementProperty::spHasDefinition
-                        | (isStatic?StatementProperty::spStatic:StatementProperty::spNone)
-                        | (isOperatorOverload?StatementProperty::spOperatorOverloading:StatementProperty::spNone));
+                        StatementProperty::HasDefinition
+                        | (isStatic?StatementProperty::Static:StatementProperty::None)
+                        | (isOperatorOverload?StatementProperty::OperatorOverloading:StatementProperty::None));
             scanMethodArgs(functionStatement, argStart);
             // add variable this to the class function
-            if (scopeStatement && scopeStatement->kind == StatementKind::skClass &&
+            if (scopeStatement && scopeStatement->kind == StatementKind::Class &&
                     !isStatic) {
                 //add this to non-static class member function
                 addStatement(
@@ -2894,11 +3146,11 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
                             "",
                             "",
                             startLine,
-                            StatementKind::skVariable,
+                            StatementKind::Variable,
                             StatementScope::Local,
                             StatementAccessibility::None,
-                            StatementProperty::spHasDefinition
-                            | (isOperatorOverload?StatementProperty::spOperatorOverloading:StatementProperty::spNone));
+                            StatementProperty::HasDefinition
+                            | (isOperatorOverload?StatementProperty::OperatorOverloading:StatementProperty::None));
             }
 
             // add "__func__ variable"
@@ -2911,11 +3163,11 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
                         "",
                         "\""+scopelessName+"\"",
                         startLine+1,
-                        StatementKind::skVariable,
+                        StatementKind::Variable,
                         StatementScope::Local,
                         StatementAccessibility::None,
-                        StatementProperty::spHasDefinition
-                        | (isOperatorOverload?StatementProperty::spOperatorOverloading:StatementProperty::spNone));
+                        StatementProperty::HasDefinition
+                        | (isOperatorOverload?StatementProperty::OperatorOverloading:StatementProperty::None));
 
         } else {
             functionStatement = addStatement(
@@ -2931,28 +3183,27 @@ void CppParser::handleMethod(StatementKind functionKind,const QString &sType, co
                         functionKind,
                         getScope(),
                         mCurrentMemberAccessibility,
-                        (isStatic?StatementProperty::spStatic:StatementProperty::spNone)
-                        | (isOperatorOverload?StatementProperty::spOperatorOverloading:StatementProperty::spNone));
+                        (isStatic?StatementProperty::Static:StatementProperty::None)
+                        | (isOperatorOverload?StatementProperty::OperatorOverloading:StatementProperty::None));
         }
 
     }
 
-    if ((mIndex < tokenCount) && mTokenizer[mIndex]->text.startsWith('{')) {
+    if ((mIndex < maxIndex) && mTokenizer[mIndex]->text.startsWith('{')) {
         addSoloScopeLevel(functionStatement,startLine);
         mIndex++; //skip '{'
-    } else if ((mIndex < tokenCount) && mTokenizer[mIndex]->text.startsWith(';')) {
+    } else if ((mIndex < maxIndex) && mTokenizer[mIndex]->text.startsWith(';')) {
         addSoloScopeLevel(functionStatement,startLine);
         if (mTokenizer[mIndex]->line != startLine)
-            removeScopeLevel(mTokenizer[mIndex]->line+1);
+            removeScopeLevel(mTokenizer[mIndex]->line+1, maxIndex);
         else
-            removeScopeLevel(startLine+1);
+            removeScopeLevel(startLine+1, maxIndex);
         mIndex++;
     }
 }
 
-void CppParser::handleNamespace(KeywordType skipType)
+void CppParser::handleNamespace(KeywordType skipType, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
     bool isInline=false;
     int startLine = mTokenizer[mIndex]->line;
 
@@ -2977,39 +3228,53 @@ void CppParser::handleNamespace(KeywordType skipType)
 //    if (command.startsWith("__")) // hack for inline namespaces
 //      isInline = true;
     mIndex++;
-    if (mIndex>=tokenCount)
+    if (mIndex>=maxIndex)
         return;
     QString aliasName;
-    if ((mIndex+2<tokenCount) && (mTokenizer[mIndex]->text == '=')) {
+    if ((mIndex+2<maxIndex) && (mTokenizer[mIndex]->text == '=')) {
         aliasName=mTokenizer[mIndex+1]->text;
+        mIndex+=2;
+        if (aliasName == "::" && mIndex<maxIndex) {
+            aliasName += mTokenizer[mIndex]->text;
+            mIndex++;
+        }
+        while(mIndex+1<maxIndex && mTokenizer[mIndex]->text == "::") {
+            aliasName+="::";
+            aliasName+=mTokenizer[mIndex+1]->text;
+            mIndex+=2;
+        }
+        //qDebug()<<command<<aliasName;
         //namespace alias
-        addStatement(
-            getCurrentScope(),
-            mCurrentFile,
-            aliasName, // name of the alias namespace
-            command, // command
-            "", // args
-            "", // noname args
-            "", // values
-            //mTokenizer[mIndex]^.Line,
-            startLine,
-            StatementKind::skNamespaceAlias,
-            getScope(),
-            mCurrentMemberAccessibility,
-            StatementProperty::spHasDefinition);
-        mIndex+=2; //skip ;
+        if (aliasName != command
+                && aliasName != getFullStatementName(command, getCurrentScope())) {
+            addStatement(
+                getCurrentScope(),
+                mCurrentFile,
+                aliasName, // name of the alias namespace
+                command, // command
+                "", // args
+                "", // noname args
+                "", // values
+                //mTokenizer[mIndex]^.Line,
+                startLine,
+                StatementKind::NamespaceAlias,
+                getScope(),
+                mCurrentMemberAccessibility,
+                StatementProperty::HasDefinition);
+        }
+        mIndex++; // skip ;
         return;
     } else if (isInline) {
         //inline namespace , just skip it
         // Skip to '{'
-        while ((mIndex<tokenCount) && (mTokenizer[mIndex]->text != '{'))
+        while ((mIndex<maxIndex) && (mTokenizer[mIndex]->text != '{'))
             mIndex++;
         int i =indexOfMatchingBrace(mIndex); //skip '}'
         if (i==mIndex)
-            mInlineNamespaceEndSkips.append(tokenCount);
+            mInlineNamespaceEndSkips.append(maxIndex);
         else
             mInlineNamespaceEndSkips.append(i);
-        if (mIndex<tokenCount)
+        if (mIndex<maxIndex)
             mIndex++; //skip '{'
     } else {
         PStatement namespaceStatement = addStatement(
@@ -3021,38 +3286,37 @@ void CppParser::handleNamespace(KeywordType skipType)
                     "", // noname args
                     "", // values
                     startLine,
-                    StatementKind::skNamespace,
+                    StatementKind::Namespace,
                     getScope(),
                     mCurrentMemberAccessibility,
-                    StatementProperty::spHasDefinition);
+                    StatementProperty::HasDefinition);
 
         // find next '{' or ';'
-        mIndex = indexOfNextSemicolonOrLeftBrace(mIndex);
-        if (mIndex<tokenCount && mTokenizer[mIndex]->text=='{')
+        mIndex = indexOfNextSemicolonOrLeftBrace(mIndex, maxIndex);
+        if (mIndex<maxIndex && mTokenizer[mIndex]->text=='{')
             addSoloScopeLevel(namespaceStatement,startLine);
         //skip it
         mIndex++;
     }
 }
 
-void CppParser::handleOtherTypedefs()
+void CppParser::handleOtherTypedefs(int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
     int startLine = mTokenizer[mIndex]->line;
     // Skip typedef word
     mIndex++;
 
-    if (mIndex>=tokenCount)
+    if (mIndex>=maxIndex)
         return;
 
     if (mTokenizer[mIndex]->text == '('
             || mTokenizer[mIndex]->text == ','
             || mTokenizer[mIndex]->text == ';') { // error typedef
         //skip over next ;
-        mIndex=indexOfNextSemicolon(mIndex)+1;
+        mIndex=indexOfNextSemicolon(mIndex, maxIndex)+1;
         return;
     }
-    if ((mIndex+1<tokenCount)
+    if ((mIndex+1<maxIndex)
             && (mTokenizer[mIndex+1]->text == ';')) {
         //no old type, not valid
         mIndex+=2; //skip ;
@@ -3075,7 +3339,7 @@ void CppParser::handleOtherTypedefs()
             tempType="";
         }
         mIndex++;
-        if (mIndex+1>=tokenCount) {
+        if (mIndex+1>=maxIndex) {
             //not valid, just exit
             return;
         }
@@ -3091,22 +3355,22 @@ void CppParser::handleOtherTypedefs()
     oldType = oldType.trimmed();
     if (oldType.isEmpty()) {
         //skip over next ;
-        mIndex=indexOfNextSemicolon(mIndex)+1;
+        mIndex=indexOfNextSemicolon(mIndex, maxIndex)+1;
         return;
     }
     QString newType;
-    while(mIndex+1<tokenCount) {
+    while(mIndex+1<maxIndex) {
         if (mTokenizer[mIndex]->text == ',' ) {
             mIndex++;
         } else if (mTokenizer[mIndex]->text == ';' ) {
             break;
         } else if (mTokenizer[mIndex]->text == '(') {
             int paramStart=mTokenizer[mIndex]->matchIndex+1;
-            if (paramStart>=tokenCount
+            if (paramStart>=maxIndex
                     || mTokenizer[paramStart]->text!='(') {
                 //not valid function pointer (no args)
                 //skip over next ;
-                mIndex=indexOfNextSemicolon(paramStart)+1;
+                mIndex=indexOfNextSemicolon(paramStart, maxIndex)+1;
                 return;
             }
             QString newType = findFunctionPointerName(mIndex);
@@ -3120,10 +3384,10 @@ void CppParser::handleOtherTypedefs()
                         "",
                         "",
                         startLine,
-                        StatementKind::skTypedef,
+                        StatementKind::Typedef,
                         getScope(),
                         mCurrentMemberAccessibility,
-                        StatementProperty::spHasDefinition);
+                        StatementProperty::HasDefinition);
                 tempType="";
             }
             mIndex = mTokenizer[paramStart]->matchIndex+1;
@@ -3143,10 +3407,10 @@ void CppParser::handleOtherTypedefs()
                             "",
                             "",
                             startLine,
-                            StatementKind::skTypedef,
+                            StatementKind::Typedef,
                             getScope(),
                             mCurrentMemberAccessibility,
-                            StatementProperty::spHasDefinition);
+                            StatementProperty::HasDefinition);
                 tempType="";
                 newType = "";
                 mIndex++;
@@ -3156,7 +3420,7 @@ void CppParser::handleOtherTypedefs()
         }
     }
 
-    // Step over semicolon (saves one HandleStatement loop)    
+    // Step over semicolon (saves one HandleStatement loop)
     mIndex++;
 }
 
@@ -3173,13 +3437,19 @@ void CppParser::handlePreprocessor()
         if (delimPos>=0) {
 //            qDebug()<<mCurrentScope.size()<<mCurrentFile<<mTokenizer[mIndex]->line<<s.mid(0,delimPos).trimmed();
             mCurrentFile = s.mid(0,delimPos).trimmed();
+            PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(mCurrentFile);
+            if (fileInfo) {
+                mCurrentFile = fileInfo->fileName();
+            } else {
+                mCurrentFile.squeeze();
+            }
             mIsSystemHeader = isSystemHeaderFile(mCurrentFile) || isProjectHeaderFile(mCurrentFile);
             mIsProjectFile = mProjectFiles.contains(mCurrentFile);
             mIsHeader = isHFile(mCurrentFile);
 
             // Mention progress to user if we enter a NEW file
             bool ok;
-            int line = s.midRef(delimPos+1).toInt(&ok);
+            int line = QStringView(s.begin() + delimPos + 1, s.end()).toInt(&ok);
             if (line == 1) {
                 mFilesScannedCount++;
                 mFilesToScanCount++;
@@ -3206,10 +3476,10 @@ void CppParser::handlePreprocessor()
                   "",// noname args
                   value,
                   mTokenizer[mIndex]->line,
-                  StatementKind::skPreprocessor,
+                  StatementKind::Preprocessor,
                   StatementScope::Global,
                   StatementAccessibility::None,
-                  StatementProperty::spHasDefinition);
+                  StatementProperty::HasDefinition);
     } // TODO: undef ( define has limited scope)
 handlePreprocessorEnd:
     mIndex++;
@@ -3234,45 +3504,30 @@ StatementAccessibility CppParser::getClassMemberAccessibility(KeywordType keywor
     }
 }
 
-void CppParser::handleAccessibilitySpecifiers(KeywordType keywordType)
+void CppParser::handleAccessibilitySpecifiers(KeywordType keywordType, int maxIndex)
 {
     mCurrentMemberAccessibility = getClassMemberAccessibility(keywordType);
     mIndex++;
 
-    if (mIndex < mTokenizer.tokenCount()
+    if (mIndex < maxIndex
             && mTokenizer[mIndex]->text == ':')
         mIndex++;   // skip ':'
 }
 
-bool CppParser::handleStatement()
+bool CppParser::handleStatement(int maxIndex)
 {
     QString funcType,funcName;
-    int idx=getCurrentBlockEndSkip();
-    int idx2=getCurrentBlockBeginSkip();
-    int idx3=getCurrentInlineNamespaceEndSkip();
+//    int idx=getCurrentBlockEndSkip();
+//    int idx2=getCurrentBlockBeginSkip();
+    int idx3=getCurrentInlineNamespaceEndSkip(maxIndex);
     KeywordType keywordType;
 #ifdef QT_DEBUG
 //    qDebug()<<lastIndex<<mIndex;
     Q_ASSERT(mIndex>=mLastIndex);
     mLastIndex=mIndex;
 #endif
-    int tokenCount = mTokenizer.tokenCount();
 
-    if (mIndex >= idx2) {
-        //skip (previous handled) block begin
-        mBlockBeginSkips.pop_back();
-        if (mIndex == idx2)
-            mIndex++;
-        else if (mIndex<tokenCount)  //error happens, but we must remove an (error) added scope
-            removeScopeLevel(mTokenizer[mIndex]->line);
-    } else if (mIndex >= idx) {
-        //skip (previous handled) block end
-        mBlockEndSkips.pop_back();
-        if (idx+1 < tokenCount)
-            removeScopeLevel(mTokenizer[idx+1]->line);
-        if (mIndex == idx)
-            mIndex++;
-    } else if (mIndex >= idx3) {
+    if (mIndex >= idx3) {
         //skip (previous handled) inline name space end
         mInlineNamespaceEndSkips.pop_back();
         if (mIndex == idx3)
@@ -3288,99 +3543,97 @@ bool CppParser::handleStatement()
                     "",
                     //mTokenizer[mIndex]^.Line,
                     mTokenizer[mIndex]->line,
-                    StatementKind::skBlock,
+                    StatementKind::Block,
                     getScope(),
                     mCurrentMemberAccessibility,
-                    StatementProperty::spHasDefinition);
+                    StatementProperty::HasDefinition);
         addSoloScopeLevel(block,mTokenizer[mIndex]->line,true);
         mIndex++;
     } else if (mTokenizer[mIndex]->text[0] == '}') {
-        removeScopeLevel(mTokenizer[mIndex]->line);
+        removeScopeLevel(mTokenizer[mIndex]->line, maxIndex);
         mIndex++;
     } else if (checkForPreprocessor()) {
         handlePreprocessor();
 //    } else if (checkForLambda()) { // is lambda
 //        handleLambda();
     } else if (mTokenizer[mIndex]->text=='(') {
-        if (mIndex+1<tokenCount &&
+        if (mIndex+1<maxIndex &&
                 mTokenizer[mIndex+1]->text=="operator") {
             // things like (operator int)
             mIndex++; //just skip '('
         } else
-            skipParenthesis(mIndex);
+            skipParenthesis(mIndex, maxIndex);
     } else if (mTokenizer[mIndex]->text==')') {
         mIndex++;
     } else if (mTokenizer[mIndex]->text.startsWith('~')) {
         //it should be a destructor
-        if (mIndex+2<tokenCount
+        if (mIndex+2<maxIndex
                 && isIdentChar(mTokenizer[mIndex+1]->text[0])
                 && mTokenizer[mIndex+2]->text=='(') {
             //dont further check to speed up
-            handleMethod(StatementKind::skDestructor, "", '~'+mTokenizer[mIndex+1]->text, mIndex+2, false, false);
+            handleMethod(StatementKind::Destructor, "", '~'+mTokenizer[mIndex+1]->text, mIndex+2, false, false, false, maxIndex);
         } else {
             //error
-            mIndex=moveToEndOfStatement(mIndex,false);
+            mIndex=moveToEndOfStatement(mIndex,false, maxIndex);
         }
     } else if (mTokenizer[mIndex]->text=="::") {
-        checkAndHandleMethodOrVar(KeywordType::None);
+        checkAndHandleMethodOrVar(KeywordType::None, maxIndex);
     } else if (!isIdentChar(mTokenizer[mIndex]->text[0])) {
-        mIndex=moveToEndOfStatement(mIndex,true);
+        mIndex=moveToEndOfStatement(mIndex,true, maxIndex);
     } else if (checkForKeyword(keywordType)) { // includes template now
-        handleKeyword(keywordType);
-    } else if (keywordType==KeywordType::For) { // (for/catch)
-        handleForBlock();
-    } else if (keywordType==KeywordType::Catch) { // (for/catch)
-        handleCatchBlock();
+        handleKeyword(keywordType, maxIndex);
+    } else if (keywordType==KeywordType::Concept) {
+        handleConcept(maxIndex);
+    } else if (keywordType==KeywordType::Requires) {
+        skipRequires(maxIndex);
+    } else if (keywordType==KeywordType::For || keywordType==KeywordType::Catch) { // (for/catch)
+        handleForBlock(maxIndex);
     } else if (checkForAccessibilitySpecifiers(keywordType)) { // public /private/proteced
-        handleAccessibilitySpecifiers(keywordType);
+        handleAccessibilitySpecifiers(keywordType, maxIndex);
     } else if (keywordType==KeywordType::Enum) {
-        handleEnum(false);
+        handleEnum(false, maxIndex);
     } else if (keywordType==KeywordType::Typedef) {
-        if (mIndex+1 < tokenCount) {
-            if (checkForTypedefStruct()) { // typedef struct something
+        if (mIndex+1 < maxIndex) {
+            if (checkForTypedefStruct(maxIndex)) { // typedef struct something
                 mIndex++; // skip 'typedef'
-                handleStructs(true);
-            } else if (checkForTypedefEnum()) { // typedef enum something
+                handleStructs(true, maxIndex);
+            } else if (checkForTypedefEnum(maxIndex)) { // typedef enum something
                 mIndex++; // skip 'typedef'
-                handleEnum(true);
+                handleEnum(true, maxIndex);
             } else
-                handleOtherTypedefs(); // typedef Foo Bar
+                handleOtherTypedefs(maxIndex); // typedef Foo Bar
         } else
             mIndex++;
-    } else if (checkForNamespace(keywordType)) {
-        handleNamespace(keywordType);
-    } else if (checkForUsing(keywordType)) {
-        handleUsing();
-    } else if (checkForStructs(keywordType)) {
-        handleStructs(false);
+    } else if (checkForNamespace(keywordType, maxIndex)) {
+        handleNamespace(keywordType, maxIndex);
+    } else if (checkForUsing(keywordType, maxIndex)) {
+        handleUsing(maxIndex);
+    } else if (checkForStructs(keywordType, maxIndex)) {
+        handleStructs(false, maxIndex);
     } else if (keywordType == KeywordType::Inline) {
         mIndex++;
     }else {
+        if (keywordType == KeywordType::Extern) {
+            if (mIndex+1<maxIndex) {
+                if (mTokenizer[mIndex+1]->text=="template") {
+                    //extern template, skit to ;
+                    //see https://en.cppreference.com/w/cpp/language/class_template#Class_template_instantiation
+                    skipNextSemicolon(mIndex, maxIndex);
+                    goto _exit;
+                }
+            }
+            keywordType = KeywordType::None;
+        }
         // it should be method/constructor/var
-        checkAndHandleMethodOrVar(keywordType);
+        checkAndHandleMethodOrVar(keywordType, maxIndex);
     }
     //Q_ASSERT(mIndex<999999);
-
-//    while (mTokenizer.lambdasCount()>0 && mTokenizer.indexOfFirstLambda()<mIndex) {
-//        handleLambda(mTokenizer.indexOfFirstLambda());
-//        mTokenizer.removeFirstLambda();
-//    }
-//    else if (checkForMethod(funcType, funcName, argStart,argEnd, isStatic, isFriend)) {
-//        handleMethod(funcType, funcName, argStart, argEnd, isStatic, isFriend); // don't recalculate parts
-//    } else if (tryHandleVar()) {
-//        //do nothing
-//    } else
-//        mIndex++;
-
-    //todo: remove mSkipList (we can check '}''s statement type instead)
-//    checkForSkipStatement();
-
-    return mIndex < tokenCount;
-
+_exit:
+    return mIndex < maxIndex;
 }
 
-void CppParser::handleStructs(bool isTypedef)
-{    
+void CppParser::handleStructs(bool isTypedef, int maxIndex)
+{
     bool isFriend = false;
     QString prefix = mTokenizer[mIndex]->text;
     if (prefix == "friend") {
@@ -3391,16 +3644,15 @@ void CppParser::handleStructs(bool isTypedef)
     prefix = mTokenizer[mIndex]->text;
     bool isStruct = ("class" != prefix); //struct/union
     int startLine = mTokenizer[mIndex]->line;
-    int tokenCount = mTokenizer.tokenCount();
 
     mIndex++; //skip struct/class/union
 
-    if (mIndex>=tokenCount)
+    if (mIndex>=maxIndex)
         return;
 
     // Do not modifiy index
-    int i=indexOfNextSemicolonOrLeftBrace(mIndex);
-    if (i >= tokenCount) {
+    int i=indexOfNextSemicolonOrLeftBrace(mIndex, maxIndex);
+    if (i >= maxIndex) {
         //error
         mIndex=i;
         return;
@@ -3412,7 +3664,7 @@ void CppParser::handleStructs(bool isTypedef)
             QString structTypeName = mTokenizer[mIndex]->text;
             QString tempType = "";
             mIndex++; // skip struct/class name
-            while(mIndex+1 < tokenCount) {
+            while(mIndex+1 < maxIndex) {
                 // Add definition statement for the synonym
                 if ( (mTokenizer[mIndex + 1]->text==","
                             || mTokenizer[mIndex + 1]->text==";")) {
@@ -3428,10 +3680,10 @@ void CppParser::handleStructs(bool isTypedef)
                                 "", // noname args
                                 "", // values
                                 mTokenizer[mIndex]->line,
-                                StatementKind::skTypedef,
+                                StatementKind::Typedef,
                                 getScope(),
                                 mCurrentMemberAccessibility,
-                                StatementProperty::spHasDefinition);
+                                StatementProperty::HasDefinition);
                     tempType="";
                     mIndex++; //skip , ;
                     if (mTokenizer[mIndex]->text.front() == ';')
@@ -3458,12 +3710,12 @@ void CppParser::handleStructs(bool isTypedef)
         PStatement firstSynonym;
         // Add class/struct name BEFORE opening brace
         if (mTokenizer[mIndex]->text != "{") {
-            while(mIndex < tokenCount) {
+            while(mIndex < maxIndex) {
                 if (mTokenizer[mIndex]->text == ":"
                         || mTokenizer[mIndex]->text == "{"
                         || mTokenizer[mIndex]->text == ";") {
                     break;
-                } else if ((mIndex + 1 < tokenCount)
+                } else if ((mIndex + 1 < maxIndex)
                   && (mTokenizer[mIndex + 1]->text == ","
                       || mTokenizer[mIndex + 1]->text == ";"
                       || mTokenizer[mIndex + 1]->text == "{"
@@ -3473,6 +3725,7 @@ void CppParser::handleStructs(bool isTypedef)
                     PStatement scopeStatement=getCurrentScope();
                     QString scopelessName;
                     QString parentName;
+
                     if (splitLastMember(command,scopelessName,parentName)) {
                         scopeStatement = getIncompleteClass(parentName,getCurrentScope());
                     } else {
@@ -3489,15 +3742,15 @@ void CppParser::handleStructs(bool isTypedef)
                                     "", // values
                                     mTokenizer[mIndex]->line,
                                     //startLine,
-                                    StatementKind::skClass,
+                                    StatementKind::Class,
                                     getScope(),
                                     mCurrentMemberAccessibility,
-                                    StatementProperty::spHasDefinition);
+                                    StatementProperty::HasDefinition);
                         command = "";
                     }
                     mIndex++;
                     break;
-                } else if ((mIndex + 2 < tokenCount)
+                } else if ((mIndex + 2 < maxIndex)
                            && (mTokenizer[mIndex + 1]->text == "final")
                            && (mTokenizer[mIndex + 2]->text==","
                                || mTokenizer[mIndex + 2]->text==":"
@@ -3514,10 +3767,10 @@ void CppParser::handleStructs(bool isTypedef)
                                     "", // values
                                     mTokenizer[mIndex]->line,
                                     //startLine,
-                                    StatementKind::skClass,
+                                    StatementKind::Class,
                                     getScope(),
                                     mCurrentMemberAccessibility,
-                                    StatementProperty::spHasDefinition);
+                                    StatementProperty::HasDefinition);
                         command="";
                     }
                     mIndex+=2;
@@ -3528,117 +3781,115 @@ void CppParser::handleStructs(bool isTypedef)
         }
 
         // Walk to opening brace if we encountered inheritance statements
-        if ((mIndex < tokenCount) && (mTokenizer[mIndex]->text == ":")) {
+        if ((mIndex < maxIndex) && (mTokenizer[mIndex]->text == ":")) {
             if (firstSynonym)
-                setInheritance(mIndex, firstSynonym, isStruct); // set the _InheritanceList value
-            mIndex=indexOfNextLeftBrace(mIndex);
+                setInheritance(mIndex, firstSynonym, isStruct, maxIndex); // set the _InheritanceList value
+            mIndex=indexOfNextLeftBrace(mIndex, maxIndex);
         }
 
-        // Check for struct synonyms after close brace
-        if (isStruct) {
+        // Check for struct/class synonyms after close brace
 
-            // Walk to closing brace
-            i = indexOfMatchingBrace(mIndex); // step onto closing brace
+        // Walk to closing brace
+        i = indexOfMatchingBrace(mIndex); // step onto closing brace
 
-            if ((i + 1 < tokenCount) && !(
-                        mTokenizer[i + 1]->text.front() == ';'
-                        || mTokenizer[i + 1]->text.front() ==  '}')) {
-                // When encountering names again after struct body scanning, skip it
-                QString command = "";
-                QString args = "";
+        if ((i + 1 < maxIndex) && !(
+                    mTokenizer[i + 1]->text.front() == ';'
+                    || mTokenizer[i + 1]->text.front() ==  '}')) {
+            // When encountering names again after struct body scanning, skip it
+            QString command = "";
+            QString args = "";
 
-                // Add synonym before opening brace
-                while(true) {
-                    i++;
-                    if (mTokenizer[i]->text=='('
-                            || mTokenizer[i]->text==')') {
-                        //skip
-                    } else if (!(mTokenizer[i]->text == '{'
-                          || mTokenizer[i]->text == ','
-                          || mTokenizer[i]->text == ';')) {
-                        if (mTokenizer[i]->text.endsWith(']')) { // cut-off array brackets
-                            int pos = mTokenizer[i]->text.indexOf('[');
-                            command += mTokenizer[i]->text.mid(0,pos) + ' ';
-                            args =  mTokenizer[i]->text.mid(pos);
-                        } else if (mTokenizer[i]->text.front() == '*'
-                                   || mTokenizer[i]->text.front() == '&') { // do not add spaces after pointer operator
-                            command += mTokenizer[i]->text;
-                        } else {
-                            command += mTokenizer[i]->text + ' ';
-                        }
+            // Add synonym before opening brace
+            while(true) {
+                i++;
+                if (mTokenizer[i]->text=='('
+                        || mTokenizer[i]->text==')') {
+                    //skip
+                } else if (!(mTokenizer[i]->text == '{'
+                      || mTokenizer[i]->text == ','
+                      || mTokenizer[i]->text == ';')) {
+                    if (mTokenizer[i]->text.endsWith(']')) { // cut-off array brackets
+                        int pos = mTokenizer[i]->text.indexOf('[');
+                        command += mTokenizer[i]->text.mid(0,pos) + ' ';
+                        args =  mTokenizer[i]->text.mid(pos);
+                    } else if (mTokenizer[i]->text == "*"
+                               || mTokenizer[i]->text == "&") { // do not add spaces after pointer operator
+                        command += mTokenizer[i]->text;
                     } else {
-                        command = command.trimmed();
-                        QString suffix,tempArgs;
-                        parseCommandTypeAndArgs(command,suffix,tempArgs);
-                        if (!command.isEmpty() &&
-                                ( !firstSynonym
-                                  || command!=firstSynonym->command )) {
-                            //not define the struct yet, we define a unamed struct
-                            if (!firstSynonym) {
-                                firstSynonym = addStatement(
-                                            getCurrentScope(),
-                                            mCurrentFile,
-                                            prefix,
-                                            "__"+command,
-                                            "",
-                                            "",
-                                            "",
-                                            mTokenizer[i]->line,
-                                            //startLine,
-                                            StatementKind::skClass,
-                                            getScope(),
-                                            mCurrentMemberAccessibility,
-                                            StatementProperty::spHasDefinition);
-                            }
-                            if (isTypedef) {
-                                //typedef
-                                addStatement(
-                                            getCurrentScope(),
-                                            mCurrentFile,
-                                            firstSynonym->command+suffix,
-                                            command,
-                                            args+tempArgs,
-                                            "",
-                                            "",
-                                            mTokenizer[mIndex]->line,
-                                            StatementKind::skTypedef,
-                                            getScope(),
-                                            mCurrentMemberAccessibility,
-                                            StatementProperty::spHasDefinition); // typedef
-                            } else {
-                                //variable define
-                                addStatement(
-                                  getCurrentScope(),
-                                  mCurrentFile,
-                                  firstSynonym->command+suffix,
-                                  command,
-                                  args+tempArgs,
-                                  "",
-                                  "",
-                                  mTokenizer[i]->line,
-                                  StatementKind::skVariable,
-                                  getScope(),
-                                  mCurrentMemberAccessibility,
-                                  StatementProperty::spHasDefinition); // TODO: not supported to pass list
-                            }
-                        }
-                        command = "";
+                        command += mTokenizer[i]->text + ' ';
                     }
-                    if (i >= tokenCount - 1)
-                        break;
-                    if (mTokenizer[i]->text=='{'
-                          || mTokenizer[i]->text== ';')
-                        break;
+                } else {
+                    command = command.trimmed();
+                    QString suffix,tempArgs;
+                    parseCommandTypeAndArgs(command,suffix,tempArgs);
+                    if (!command.isEmpty() &&
+                            ( !firstSynonym
+                              || command!=firstSynonym->command )) {
+                        //not define the struct yet, we define a unamed struct
+                        if (!firstSynonym) {
+                            firstSynonym = addStatement(
+                                        getCurrentScope(),
+                                        mCurrentFile,
+                                        prefix,
+                                        "___dummy___"+command,
+                                        "",
+                                        "",
+                                        "",
+                                        mTokenizer[i]->line,
+                                        //startLine,
+                                        StatementKind::Class,
+                                        getScope(),
+                                        mCurrentMemberAccessibility,
+                                        StatementProperty::HasDefinition | StatementProperty::DummyStatement);
+                        }
+                        if (isTypedef) {
+                            //typedef
+                            addStatement(
+                                        getCurrentScope(),
+                                        mCurrentFile,
+                                        firstSynonym->command+suffix,
+                                        command,
+                                        args+tempArgs,
+                                        "",
+                                        "",
+                                        mTokenizer[mIndex]->line,
+                                        StatementKind::Typedef,
+                                        getScope(),
+                                        mCurrentMemberAccessibility,
+                                        StatementProperty::HasDefinition); // typedef
+                        } else {
+                            //variable define
+                            addStatement(
+                              getCurrentScope(),
+                              mCurrentFile,
+                              firstSynonym->command+suffix,
+                              command,
+                              args+tempArgs,
+                              "",
+                              "",
+                              mTokenizer[i]->line,
+                              StatementKind::Variable,
+                              getScope(),
+                              mCurrentMemberAccessibility,
+                              StatementProperty::HasDefinition); // TODO: not supported to pass list
+                        }
+                    }
+                    command = "";
                 }
-
-              // Nothing worth mentioning after closing brace
-              // Proceed to set first synonym as current class
+                if (i >= maxIndex - 1)
+                    break;
+                if (mTokenizer[i]->text=='{'
+                      || mTokenizer[i]->text== ';')
+                    break;
             }
+
+          // Nothing worth mentioning after closing brace
+          // Proceed to set first synonym as current class
         }
         if (!firstSynonym) {
             PStatement scope = getCurrentScope();
-            if (scope && scope->kind == StatementKind::skClass
-                    && mIndex<tokenCount && mTokenizer[mIndex]->text=="{") {
+            if (scope && scope->kind == StatementKind::Class
+                    && mIndex<maxIndex && mTokenizer[mIndex]->text=="{") {
                 //C11 anonymous union/struct
                 addSoloScopeLevel(scope, mTokenizer[mIndex]->line);
                 //skip {
@@ -3655,42 +3906,92 @@ void CppParser::handleStructs(bool isTypedef)
                           "",
                           "",
                           mTokenizer[mIndex]->line,
-                          StatementKind::skBlock,
+                          StatementKind::Block,
                           getScope(),
                           mCurrentMemberAccessibility,
-                          StatementProperty::spHasDefinition);
+                          StatementProperty::HasDefinition);
             }
         }
-        if (mIndex < tokenCount)
+        if (mIndex < maxIndex)
             addSoloScopeLevel(firstSynonym,mTokenizer[mIndex]->line);
         else
             addSoloScopeLevel(firstSynonym,startLine);
 
         // Step over {
-        if ((mIndex < tokenCount) && (mTokenizer[mIndex]->text == "{"))
+        if ((mIndex < maxIndex) && (mTokenizer[mIndex]->text == "{"))
             mIndex++;
     }
 }
 
-void CppParser::handleUsing()
+void CppParser::handleStructredBinding(const QString &sType, int maxIndex)
+{
+    if (mIndex+1 < maxIndex
+            && ((mTokenizer[mIndex+1]->text == ":")
+                || (mTokenizer[mIndex+1]->text == "="))) {
+        QString typeName;
+        QString templateParams;
+        int endIndex = indexOfNextSemicolon(mIndex+2, maxIndex);
+        QString expressionText;
+        for (int i=mIndex+2;i<endIndex;i++) {
+            expressionText+=mTokenizer[i]->text+" ";
+        }
+        QStringList phraseExpression = splitExpression(expressionText);
+        int pos = 0;
+        PEvalStatement aliasStatement = doEvalExpression(mCurrentFile,
+                                phraseExpression,
+                                pos,
+                                getCurrentScope(),
+                                PEvalStatement(),
+                                true,false);
+        if(aliasStatement && aliasStatement->effectiveTypeStatement) {
+            if ( mTokenizer[mIndex+1]->text == ":" ) {
+                if (STLMaps.contains(aliasStatement->effectiveTypeStatement->fullName)) {
+                    typeName = "std::pair";
+                    templateParams = aliasStatement->templateParams;
+                }
+            }
+            if (typeName == "std::pair" && !templateParams.isEmpty()) {
+                QString firstType = doFindFirstTemplateParamOf(mCurrentFile,aliasStatement->templateParams,
+                                                                                  getCurrentScope());
+                QString secondType = doFindTemplateParamOf(mCurrentFile,aliasStatement->templateParams,1,
+                                                                                  getCurrentScope());
+                QString s = mTokenizer[mIndex]->text;
+                s = s.mid(1,s.length()-2);
+                QStringList lst = s.split(",");
+                if (lst.length()==2) {
+                    QString firstVar = lst[0].trimmed();
+                    QString secondVar = lst[1].trimmed();
+                    bool isConst = sType.startsWith("const");
+                    QString suffix;
+                    if (sType.endsWith("&&")) suffix = "&&";
+                    else if (sType.endsWith("&")) suffix = "&";
+                    doAddVar(firstVar, firstType, isConst, suffix);
+                    doAddVar(secondVar, secondType, isConst, suffix);
+                }
+            }
+        }
+    }
+    mIndex = indexOfNextPeriodOrSemicolon(mIndex+1, maxIndex);
+}
+
+void CppParser::handleUsing(int maxIndex)
 {
     int startLine = mTokenizer[mIndex]->line;
     if (mCurrentFile.isEmpty()) {
         //skip pass next ;
-        mIndex=indexOfNextSemicolon(mIndex)+1;
+        mIndex=indexOfNextSemicolon(mIndex, maxIndex)+1;
         return;
     }
-    int tokenCount = mTokenizer.tokenCount();
 
     mIndex++; //skip 'using'
 
     //handle things like 'using vec = std::vector; '
-    if (mIndex+1 < tokenCount
+    if (mIndex+1 < maxIndex
             && mTokenizer[mIndex+1]->text == "=") {
         QString fullName = mTokenizer[mIndex]->text;
         QString aliasName;
         mIndex+=2;
-        while (mIndex<tokenCount &&
+        while (mIndex<maxIndex &&
                mTokenizer[mIndex]->text!=';') {
             aliasName += mTokenizer[mIndex]->text;
             mIndex++;
@@ -3704,23 +4005,31 @@ void CppParser::handleUsing()
                     "", // noname args
                     "", // values
                     startLine,
-                    StatementKind::skTypedef,
+                    StatementKind::Typedef,
                     getScope(),
                     mCurrentMemberAccessibility,
-                    StatementProperty::spHasDefinition);
+                    StatementProperty::HasDefinition);
         // skip ;
         mIndex++;
         return;
     }
     //handle things like 'using std::vector;'
-    if ((mIndex+2>=tokenCount)
+    if ((mIndex+2>=maxIndex)
             || (mTokenizer[mIndex]->text != "namespace")) {
         QString fullName;
         QString usingName;
-        while (mIndex<tokenCount &&
+        bool appendUsingName = false;
+        while (mIndex<maxIndex &&
                mTokenizer[mIndex]->text!=';') {
             fullName += mTokenizer[mIndex]->text;
-            usingName = mTokenizer[mIndex]->text;
+            if (!appendUsingName) {
+                usingName = mTokenizer[mIndex]->text;
+                if (usingName == "operator") {
+                    appendUsingName=true;
+                }
+            } else {
+                usingName += mTokenizer[mIndex]->text;
+            }
             mIndex++;
         }
         if (fullName!=usingName) {
@@ -3733,10 +4042,10 @@ void CppParser::handleUsing()
                         "", // noname args
                         "", // values
                         startLine,
-                        StatementKind::skAlias,
+                        StatementKind::Alias,
                         getScope(),
                         mCurrentMemberAccessibility,
-                        StatementProperty::spHasDefinition);
+                        StatementProperty::HasDefinition);
         }
         //skip ;
         mIndex++;
@@ -3746,14 +4055,15 @@ void CppParser::handleUsing()
     PStatement scopeStatement = getCurrentScope();
 
     QString usingName;
-    while (mIndex<tokenCount &&
+    while (mIndex<maxIndex &&
            mTokenizer[mIndex]->text!=';') {
         usingName += mTokenizer[mIndex]->text;
         mIndex++;
     }
 
     if (scopeStatement) {
-        QString fullName = scopeStatement->fullName + "::" + usingName;
+        QString fullName = calcFullname(scopeStatement->fullName, usingName);
+
         if (!mNamespaces.contains(fullName)) {
             fullName = usingName;
         }
@@ -3761,18 +4071,18 @@ void CppParser::handleUsing()
             scopeStatement->usingList.insert(fullName);
         }
     } else {
-        PFileIncludes fileInfo = mPreprocessor.includesList().value(mCurrentFile);
+        PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(mCurrentFile);
         if (!fileInfo)
             return;
         if (mNamespaces.contains(usingName)) {
-            fileInfo->usings.insert(usingName);
+            fileInfo->addUsing(usingName);
         }
     }
     //skip ;
     mIndex++;
 }
 
-void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
+void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic, int maxIndex)
 {
     QString lastType;
     if (typePrefix=="extern") {
@@ -3788,13 +4098,12 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
     PStatement addedVar;
 
     QString tempType;
-    int tokenCount = mTokenizer.tokenCount();
     while (lastType.endsWith("*") || lastType.endsWith("&")) {
         tempType = (lastType.back()+tempType);
         lastType.truncate(lastType.length()-2);
     }
 
-    while(mIndex<tokenCount) {
+    while(mIndex<maxIndex) {
         switch(mTokenizer[mIndex]->text[0].unicode()) {
         case ':':
             if (mTokenizer[mIndex]->text.length()>1) {
@@ -3808,22 +4117,27 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
                 // unsigned short bAppReturnCode:8,reserved:6,fBusy:1,fAck:1
                 // as
                 // unsigned short bAppReturnCode,reserved,fBusy,fAck
-                if (mIndex+1<tokenCount
-                        && isIdentifier(mTokenizer[mIndex+1]->text)
-                        && isIdentChar(mTokenizer[mIndex+1]->text.back())
+                if (mIndex+1<maxIndex
+                        && isIdentChar(mTokenizer[mIndex+1]->text.front())
+                        && (isIdentChar(mTokenizer[mIndex+1]->text.back()) || isDigitChar(mTokenizer[mIndex+1]->text.back()))
                         && addedVar
-                        && !(addedVar->properties & StatementProperty::spFunctionPointer)
+                        && !(addedVar->properties & StatementProperty::FunctionPointer)
                         && AutoTypes.contains(addedVar->type)) {
                     //handle e.g.: for(auto x:vec)
-                    QStringList phraseExpression;
-                    phraseExpression.append(mTokenizer[mIndex+1]->text);
+                    // for(auto x:vec ) is replaced by "for { auto x: vec ;"  in handleForAndCatch();
+                    int endIndex = indexOfNextSemicolon(mIndex+1, maxIndex);
+                    QString expressionText;
+                    for (int i=mIndex+1;i<endIndex;i++) {
+                        expressionText+=mTokenizer[i]->text+" ";
+                    }
+                    QStringList phraseExpression = splitExpression(expressionText);
                     int pos = 0;
                     PEvalStatement aliasStatement = doEvalExpression(mCurrentFile,
                                             phraseExpression,
                                             pos,
                                             getCurrentScope(),
                                             PEvalStatement(),
-                                            true);
+                                            true,false);
                     if(aliasStatement && aliasStatement->effectiveTypeStatement) {
                         if (STLMaps.contains(aliasStatement->effectiveTypeStatement->fullName)) {
                             addedVar->type = "std::pair"+aliasStatement->templateParams;
@@ -3834,10 +4148,11 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
                                 addedVar->type = type;
                         }
                     }
+                    mIndex=endIndex;
                 }
                 addedVar.reset();
                 bool should_exit=false;
-                while (mIndex < tokenCount) {
+                while (mIndex < maxIndex) {
                     switch(mTokenizer[mIndex]->text[0].unicode()) {
                     case ',':
                     case ';':
@@ -3862,41 +4177,42 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
             mIndex++;
             return;
         case '=':
-            if (mIndex+1<tokenCount
+            if (mIndex+1<maxIndex
                     && mTokenizer[mIndex+1]->text!="{"
                     && addedVar
-                    && !(addedVar->properties & StatementProperty::spFunctionPointer)
+                    && !(addedVar->properties & StatementProperty::FunctionPointer)
                     && AutoTypes.contains(addedVar->type)) {
                 //handle e.g.: auto x=blahblah;
                 int pos = 0;
 
-                int endIndex = skipAssignment(mIndex, tokenCount);
-                QStringList phraseExpression;
+                int endIndex = skipAssignment(mIndex, maxIndex);
+                QString expressionText;
                 for (int i=mIndex+1;i<endIndex;i++) {
-                    QString cmd = mTokenizer[i]->text;
-                    if (cmd.length()>1 && cmd.endsWith(".")) {
-                        phraseExpression.append(cmd.left(cmd.length()-1));
-                        phraseExpression.append(".");
-                    } else if (cmd.length()>2 && cmd.endsWith("->")) {
-                        phraseExpression.append(cmd.left(cmd.length()-2));
-                        phraseExpression.append("->");
-                    } else if (cmd.length()>2 && cmd.endsWith("::")) {
-                        phraseExpression.append(cmd.left(cmd.length()-2));
-                        phraseExpression.append("::");
-                    } else
-                        phraseExpression.append(cmd);
+                    expressionText.append(mTokenizer[i]->text);
+                    expressionText.append(" ");
                 }
+                QStringList phraseExpression = splitExpression(expressionText);
                 PEvalStatement aliasStatement = doEvalExpression(mCurrentFile,
                                         phraseExpression,
                                         pos,
                                         getCurrentScope(),
                                         PEvalStatement(),
-                                        true);
+                                        true,false);
                 if(aliasStatement) {
-                    if (aliasStatement->effectiveTypeStatement) {
-                        addedVar->type = aliasStatement->effectiveTypeStatement->fullName;
-                        if (!addedVar->type.endsWith(">"))
-                            addedVar->type += aliasStatement->templateParams;
+                    if (aliasStatement->typeStatement) {
+                        addedVar->type = aliasStatement->typeStatement->fullName;
+                        if (!aliasStatement->templateParams.isEmpty()) {
+                            if (!addedVar->type.endsWith(">")) {
+                                addedVar->type += aliasStatement->templateParams;
+                            } else {
+                                QString type = addedVar->type;
+                                int pos = type.indexOf('<');
+                                if (pos>=0) {
+                                    type = type.left(pos);
+                                    addedVar->type = type + aliasStatement->templateParams;
+                                }
+                            }
+                        }
                         if (aliasStatement->typeStatement
                                 && STLIterators.contains(aliasStatement->typeStatement->command)
                                 && !aliasStatement->templateParams.isEmpty()) {
@@ -3916,7 +4232,7 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
                 }
                 mIndex = endIndex;
             } else
-                mIndex = skipAssignment(mIndex, tokenCount);
+                mIndex = skipAssignment(mIndex, maxIndex);
             addedVar.reset();
             break;
         case '*':
@@ -3924,8 +4240,12 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
             tempType+=mTokenizer[mIndex]->text;
             mIndex++;
             break;
+        case ',':
+            tempType="";
+            mIndex++;
+            break;
         case '(':
-            if (mTokenizer[mIndex]->matchIndex+1<tokenCount
+            if (mTokenizer[mIndex]->matchIndex+1<maxIndex
                     && mTokenizer[mTokenizer[mIndex]->matchIndex+1]->text=='(') {
                         //function pointer
                 QString cmd = findFunctionPointerName(mIndex);
@@ -3948,53 +4268,44 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
                                 "",
                                 "",
                                 mTokenizer[mIndex]->line,
-                                StatementKind::skVariable,
+                                StatementKind::Variable,
                                 getScope(),
                                 mCurrentMemberAccessibility,
-                                //True,
-                                (isExtern?StatementProperty::spNone:StatementProperty::spHasDefinition)
-                                | (isStatic?StatementProperty::spStatic:StatementProperty::spNone)
-                                | StatementProperty::spFunctionPointer);
+                                (isExtern?StatementProperty::None:StatementProperty::HasDefinition)
+                                | (isStatic?StatementProperty::Static:StatementProperty::None)
+                                | StatementProperty::FunctionPointer);
                 }
                 addedVar.reset();
                 tempType="";
-                mIndex=indexOfNextPeriodOrSemicolon(argEnd+1);
+                mIndex=indexOfNextPeriodOrSemicolon(argEnd+1, maxIndex);
                 break;
             }
             //not function pointer, fall through
+            [[fallthrough]];
         case '{':
             tempType="";
-            if (mIndex+1<tokenCount
+            if (mIndex+1<maxIndex
                     && isIdentifier(mTokenizer[mIndex+1]->text)
                     && addedVar
-                    && !(addedVar->properties & StatementProperty::spFunctionPointer)
+                    && !(addedVar->properties & StatementProperty::FunctionPointer)
                     && AutoTypes.contains(addedVar->type)) {
                 int pos = 0;
                 int endIndex = mTokenizer[mIndex]->matchIndex;
-                QStringList phraseExpression;
+                QString expressionText;
                 for (int i=mIndex+1;i<endIndex;i++) {
-                    QString cmd = mTokenizer[i]->text;
-                    if (cmd.length()>1 && cmd.endsWith(".")) {
-                        phraseExpression.append(cmd.left(cmd.length()-1));
-                        phraseExpression.append(".");
-                    } else if (cmd.length()>2 && cmd.endsWith("->")) {
-                        phraseExpression.append(cmd.left(cmd.length()-2));
-                        phraseExpression.append("->");
-                    } else if (cmd.length()>2 && cmd.endsWith("::")) {
-                        phraseExpression.append(cmd.left(cmd.length()-2));
-                        phraseExpression.append("::");
-                    } else
-                        phraseExpression.append(cmd);
+                    expressionText.append(mTokenizer[i]->text);
+                    expressionText.append(" ");
                 }
+                QStringList phraseExpression = splitExpression(expressionText);
                 PEvalStatement aliasStatement = doEvalExpression(mCurrentFile,
                                         phraseExpression,
                                         pos,
                                         getCurrentScope(),
                                         PEvalStatement(),
-                                        true);
+                                        true,false);
                 if(aliasStatement  && aliasStatement->effectiveTypeStatement) {
-                    if (aliasStatement->effectiveTypeStatement) {
-                        addedVar->type = aliasStatement->effectiveTypeStatement->fullName;
+                    if (aliasStatement->typeStatement) {
+                        addedVar->type = aliasStatement->typeStatement->fullName;
                         if (!addedVar->type.endsWith(">"))
                             addedVar->type += aliasStatement->templateParams;
                         if (aliasStatement->typeStatement
@@ -4044,24 +4355,101 @@ void CppParser::handleVar(const QString& typePrefix,bool isExtern,bool isStatic)
                                     "",
                                     "",
                                     mTokenizer[mIndex]->line,
-                                    StatementKind::skVariable,
+                                    StatementKind::Variable,
                                     getScope(),
                                     mCurrentMemberAccessibility,
-                                    //True,
-                                    (isExtern?StatementProperty::spNone:StatementProperty::spHasDefinition)
-                                    | (isStatic?StatementProperty::spStatic:StatementProperty::spNone));
+                                    (isExtern?StatementProperty::None:StatementProperty::HasDefinition)
+                                    | (isStatic?StatementProperty::Static:StatementProperty::None));
                         tempType="";
                     }
                 }
                 mIndex++;
             } else {
-                tempType="";
-                mIndex++;
+                mIndex = indexOfNextPeriodOrSemicolon(mIndex, maxIndex);
+                return;
             }
         }
     }
     // Skip ;
     mIndex++;
+}
+
+void CppParser::handleInheritance(PStatement derivedStatement, PClassInheritanceInfo inheritanceInfo)
+{
+    if (inheritanceInfo->handled)
+        return;
+    PStatement statement = doFindStatementOf(
+                inheritanceInfo->file,
+                inheritanceInfo->parentClassName,
+                inheritanceInfo->isGlobal?PStatement():derivedStatement->parentScope.lock());
+
+    if (statement && statement->kind == StatementKind::Class) {
+        inheritClassStatement(derivedStatement,
+                              inheritanceInfo->isStruct,
+                              statement,
+                              inheritanceInfo->visibility);
+//        inheritanceInfo->parentClassFilename = statement->fileName;
+        inheritanceInfo->handled = true;
+        PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(statement->fileName);
+        Q_ASSERT(fileInfo!=nullptr);
+        fileInfo->addHandledInheritances(inheritanceInfo);
+    }
+
+}
+
+void CppParser::handleInheritances()
+{
+    for (int i=mClassInheritances.length()-1;i>=0;i--) {
+        PClassInheritanceInfo inheritanceInfo = mClassInheritances[i];
+        PStatement derivedStatement = inheritanceInfo->derivedClass.lock();
+        if (!derivedStatement) {
+            //the derived class is invalid, remove it
+            if (i<mClassInheritances.length()-1) {
+                mClassInheritances[i]=mClassInheritances.back();
+            } else {
+                mClassInheritances.pop_back();
+            }
+            continue;
+        }
+        handleInheritance(derivedStatement, inheritanceInfo);
+    }
+    //mClassInheritances.clear();
+}
+
+void CppParser::skipRequires(int maxIndex)
+{
+    mIndex++; //skip 'requires';
+
+    while (mIndex < maxIndex) { // ||
+        while (mIndex < maxIndex) { // &&
+            if (mTokenizer[mIndex]->text=='(') {
+                //skip parenthesized expression
+                mIndex = mTokenizer[mIndex]->matchIndex+1;
+            } else if (isIdentifier(mTokenizer[mIndex]->text)) {
+                // skip foo<T> or foo::boo::ttt<T>
+                while (mIndex < maxIndex) {
+                    if (!isIdentifier(mTokenizer[mIndex]->text))
+                        return;
+                    mIndex++;
+                    if (mIndex>=maxIndex)
+                        return;
+                    if (mTokenizer[mIndex]->text!="::")
+                        break;
+                    mIndex++; // skip '::';
+                }
+            }
+            if (mIndex+1>=maxIndex)
+                return;
+            if (mTokenizer[mIndex]->text!="&" || mTokenizer[mIndex+1]->text!="&")
+                break;
+            mIndex+=2; // skip '&&';
+        }
+        if (mIndex+1>=maxIndex)
+            return;
+        if (mTokenizer[mIndex]->text!="|" || mTokenizer[mIndex+1]->text!="|")
+            break;
+        mIndex+=2; // skip '||';
+    }
 }
 
 void CppParser::internalParse(const QString &fileName)
@@ -4084,9 +4472,9 @@ void CppParser::internalParse(const QString &fileName)
 
     QStringList preprocessResult = mPreprocessor.result();
 #ifdef QT_DEBUG
-//        stringsToFile(mPreprocessor.result(),QString("r:\\preprocess-%1.txt").arg(extractFileName(fileName)));
-//        mPreprocessor.dumpDefinesTo("r:\\defines.txt");
-//        mPreprocessor.dumpIncludesListTo("r:\\includes.txt");
+       // stringsToFile(mPreprocessor.result(),QString("z:\\preprocess-%1.txt").arg(extractFileName(fileName)));
+       // mPreprocessor.dumpDefinesTo("z:\\defines.txt");
+       // mPreprocessor.dumpIncludesListTo("z:\\includes.txt");
 #endif
     //qDebug()<<"preprocess"<<timer.elapsed();
     //reduce memory usage
@@ -4103,21 +4491,26 @@ void CppParser::internalParse(const QString &fileName)
     if (mTokenizer.tokenCount() == 0)
         return;
 #ifdef QT_DEBUG
-//       mTokenizer.dumpTokens(QString("r:\\tokens-%1.txt").arg(extractFileName(fileName)));
+       // mTokenizer.dumpTokens(QString("z:\\tokens-%1.txt").arg(extractFileName(fileName)));
 #endif
 #ifdef QT_DEBUG
         mLastIndex = -1;
 #endif
     //    timer.restart();
     // Process the token list
+    int endIndex = mTokenizer.tokenCount();
     while(true) {
-        if (!handleStatement())
+        if (!handleStatement(endIndex))
             break;
     }
+#ifdef QT_DEBUG
+       // mTokenizer.dumpTokens(QString("z:\\tokens-after-%1.txt").arg(extractFileName(fileName)));
+#endif
+    handleInheritances();
     //    qDebug()<<"parse"<<timer.elapsed();
 #ifdef QT_DEBUG
-//        mStatementList.dumpAll(QString("r:\\all-stats-%1.txt").arg(extractFileName(fileName)));
-//        mStatementList.dump(QString("r:\\stats-%1.txt").arg(extractFileName(fileName)));
+       // mStatementList.dumpAll(QString("z:\\all-stats-%1.txt").arg(extractFileName(fileName)));
+       // mStatementList.dump(QString("z:\\stats-%1.txt").arg(extractFileName(fileName)));
 #endif
     //reduce memory usage
     internalClear();
@@ -4135,9 +4528,22 @@ void CppParser::inheritClassStatement(const PStatement& derived, bool isStruct,
     }
     foreach (const PStatement& statement, base->children) {
         if (statement->accessibility == StatementAccessibility::Private
-                || statement->kind == StatementKind::skConstructor
-                || statement->kind == StatementKind::skDestructor)
+                || statement->kind == StatementKind::Constructor
+                || statement->kind == StatementKind::Destructor)
             continue;
+        if (derived->children.contains(statement->command)) {
+            // Check if it's overwritten(hidden) by the derived
+            QList<PStatement> children = derived->children.values(statement->command);
+            bool overwritten = false;
+            foreach(const PStatement& child, children) {
+                if (!child->isInherited() && child->noNameArgs == statement->noNameArgs) {
+                    overwritten = true;
+                    break;
+                }
+            }
+            if (overwritten)
+                continue;
+        }
         StatementAccessibility m_acc;
         switch(access) {
         case StatementAccessibility::Public:
@@ -4157,36 +4563,17 @@ void CppParser::inheritClassStatement(const PStatement& derived, bool isStruct,
     }
 }
 
-void CppParser::fillListOfFunctions(const QString& fileName, int line,
-                                    const PStatement& statement,
-                                    const PStatement& scopeStatement, QStringList &list)
-{
-    StatementMap children = mStatementList.childrenStatements(scopeStatement);
-    for (const PStatement& child:children) {
-        if ((statement->command == child->command)
-#ifdef Q_OS_WIN
-                || (statement->command +'A' == child->command)
-                || (statement->command +'W' == child->command)
-#endif
-                ) {
-            if (line < child->line && (child->fileName == fileName))
-                continue;
-            list.append(prettyPrintStatement(child,child->fileName,child->line));
-        }
-    }
-}
-
 QList<PStatement> CppParser::getListOfFunctions(const QString &fileName, int line, const PStatement &statement, const PStatement &scopeStatement) const
 {
     QList<PStatement> result;
     StatementMap children = mStatementList.childrenStatements(scopeStatement);
+    QSet<QString> includedFiles = internalGetIncludedFiles(fileName);
     for (const PStatement& child:children) {
-        if (( (statement->command == child->command)
-#ifdef Q_OS_WIN
-                || (statement->command +'A' == child->command)
-                || (statement->command +'W' == child->command)
-#endif
-              ) ) {
+        if (statement->command == child->command) {
+            if (child->kind == StatementKind::Alias)
+                continue;
+            if (!includedFiles.contains(fileName))
+                continue;
             if (line < child->line && (child->fileName == fileName))
                 continue;
             result.append(child);
@@ -4201,11 +4588,10 @@ PStatement CppParser::findMacro(const QString &phrase, const QString &fileName) 
     if (statementMap.isEmpty())
         return PStatement();
     StatementList statements = statementMap.values(phrase);
-    PFileIncludes includes = mPreprocessor.includesList().value(fileName,PFileIncludes());
+    PParsedFileInfo includes = mPreprocessor.findFileInfo(fileName);
     foreach (const PStatement& s, statements) {
-        if (s->kind == StatementKind::skPreprocessor) {
-            if (includes && !includes->includeFiles.contains(s->fileName)
-                    && !includes->includeFiles.contains(s->definitionFileName))
+        if (s->kind == StatementKind::Preprocessor) {
+            if (includes && fileName != s->fileName && !includes->including(s->fileName))
                 continue;
             return s;
         }
@@ -4238,6 +4624,48 @@ PStatement CppParser::findMemberOfStatement(const QString &phrase,
     return statementMap.value(s,PStatement());
 }
 
+
+PStatement CppParser::findMemberOfStatement(const QString& filename,
+                                            const QString &phrase,
+                                            const PStatement& scopeStatement) const
+{
+    const StatementMap& statementMap =mStatementList.childrenStatements(scopeStatement);
+    if (statementMap.isEmpty())
+        return PStatement();
+
+    QString s = phrase;
+    //remove []
+    int p = phrase.indexOf('[');
+    if (p>=0)
+        s.truncate(p);
+    //remove ()
+    p = phrase.indexOf('(');
+    if (p>=0)
+        s.truncate(p);
+
+    //remove <>
+    p =s.indexOf('<');
+    if (p>=0)
+        s.truncate(p);
+    if (scopeStatement) {
+        return statementMap.value(s,PStatement());
+    } else {
+        QList<PStatement> stats = statementMap.values(s);
+        PParsedFileInfo fileInfo =  mPreprocessor.findFileInfo(filename);
+        foreach(const PStatement &s,stats) {
+            if (s->line==-1) {
+                return s; // hard defines
+            } if (s->fileName == filename || s->definitionFileName==filename) {
+                return s;
+            } else if (fileInfo && (fileInfo->including(s->fileName)
+                    || fileInfo->including(s->definitionFileName))) {
+                return s;
+            }
+        }
+        return PStatement();
+    }
+}
+
 QList<PStatement> CppParser::findMembersOfStatement(const QString &phrase, const PStatement &scopeStatement) const
 {
     const StatementMap& statementMap =mStatementList.childrenStatements(scopeStatement);
@@ -4265,7 +4693,7 @@ QList<PStatement> CppParser::findMembersOfStatement(const QString &phrase, const
 PStatement CppParser::findStatementInScope(const QString &name, const QString &noNameArgs,
                                            StatementKind kind, const PStatement& scope) const
 {
-    if (scope && scope->kind == StatementKind::skNamespace) {
+    if (scope && scope->kind == StatementKind::Namespace) {
         PStatementList namespaceStatementsList = doFindNamespace(scope->command);
         if (!namespaceStatementsList)
             return PStatement();
@@ -4284,7 +4712,7 @@ PStatement CppParser::findStatementInScope(const QString &name, const PStatement
 {
     if (!scope)
         return findMemberOfStatement(name,scope);
-    if (scope->kind == StatementKind::skNamespace) {
+    if (scope->kind == StatementKind::Namespace) {
         return findStatementInNamespace(name, scope->fullName);
     } else {
         return findMemberOfStatement(name,scope);
@@ -4305,22 +4733,74 @@ PStatement CppParser::findStatementInNamespace(const QString &name, const QStrin
 }
 
 PEvalStatement CppParser::doEvalExpression(const QString& fileName,
-                                       QStringList& phraseExpression,
+                                       QStringList phraseExpression,
                                        int &pos,
                                        const PStatement& scope,
                                        const PEvalStatement& previousResult,
-                                       bool freeScoped) const
+                                       bool freeScoped,
+                                       bool expandMacros) const
 {
-    //dummy function to easy later upgrades
-    return doEvalPointerArithmetic(fileName,
-                                        phraseExpression,
-                                        pos,
-                                        scope,
-                                        previousResult,
-                                   freeScoped);
+    if (expandMacros) {
+        QList<QSet<QString>> usedMacros;
+        usedMacros.reserve(phraseExpression.length());
+        for(int i=0;i<phraseExpression.length();i++) {
+            usedMacros.append(QSet<QString>());
+        }
+        int i=pos;
+        while(i<phraseExpression.length()) {
+            QString word = phraseExpression[i];
+            if (isIdentifier(word)) {
+                QSet<QString> used = usedMacros[i];
+                if (!used.contains(word)) {
+                    PStatement macro = findMacro(word, fileName);
+                    if (macro) {
+                        if(!expandMacro(phraseExpression, i,  macro, usedMacros))
+                            return PEvalStatement();
+                    }
+                }
+            }
+            i++;
+        }
+    }
+    if (pos>=phraseExpression.length())
+        return PEvalStatement();
+    if (phraseExpression[pos] == "new") {
+        pos++;
+        if (pos>=phraseExpression.length())
+            return PEvalStatement();
+        PEvalStatement result = doEvalExpression(
+                    fileName,
+                    phraseExpression,
+                    pos,
+                    scope,
+                    previousResult,
+                    freeScoped,
+                    false);
+        if (result) {
+            if (pos < phraseExpression.length())
+                result = PEvalStatement();
+            else if (result->kind == EvalStatementKind::Variable) {
+                if (result->pointerLevel==0)
+                    result->pointerLevel = 1;
+            } else if (result->kind == EvalStatementKind::Type) {
+                result->kind = EvalStatementKind::Variable;
+                if (result->pointerLevel==0)
+                    result->pointerLevel = 1;
+            } else
+                result = PEvalStatement();
+        }
+        return result;
+    } else
+        return doEvalArithmeticOperation(
+                    fileName,
+                    phraseExpression,
+                    pos,
+                    scope,
+                    previousResult,
+                    freeScoped);
 }
 
-PEvalStatement CppParser::doEvalPointerArithmetic(const QString &fileName, QStringList &phraseExpression, int &pos, const PStatement &scope, const PEvalStatement &previousResult, bool freeScoped) const
+PEvalStatement CppParser::doEvalArithmeticOperation(const QString &fileName, const QStringList &phraseExpression, int &pos, const PStatement &scope, const PEvalStatement &previousResult, bool freeScoped) const
 {
     if (pos>=phraseExpression.length())
         return PEvalStatement();
@@ -4371,7 +4851,7 @@ PEvalStatement CppParser::doEvalPointerArithmetic(const QString &fileName, QStri
 
 PEvalStatement CppParser::doEvalPointerToMembers(
         const QString &fileName,
-        QStringList &phraseExpression,
+        const QStringList &phraseExpression,
         int &pos,
         const PStatement &scope,
         const PEvalStatement &previousResult,
@@ -4380,7 +4860,7 @@ PEvalStatement CppParser::doEvalPointerToMembers(
     if (pos>=phraseExpression.length())
         return PEvalStatement();
     //find the start scope statement
-    PEvalStatement currentResult = doEvalCCast(
+    PEvalStatement currentResult = doEvalTypeCast(
                 fileName,
                 phraseExpression,
                 pos,
@@ -4396,7 +4876,7 @@ PEvalStatement CppParser::doEvalPointerToMembers(
                     || phraseExpression[pos]=="->*")) {
             pos++;
             currentResult =
-                    doEvalCCast(
+                    doEvalTypeCast(
                         fileName,
                         phraseExpression,
                         pos,
@@ -4413,8 +4893,8 @@ PEvalStatement CppParser::doEvalPointerToMembers(
     return currentResult;
 }
 
-PEvalStatement CppParser::doEvalCCast(const QString &fileName,
-                                                   QStringList &phraseExpression,
+PEvalStatement CppParser::doEvalTypeCast(const QString &fileName,
+                                                   const QStringList &phraseExpression,
                                                    int &pos,
                                                    const PStatement& scope,
                                                    const PEvalStatement& previousResult,
@@ -4424,8 +4904,9 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
         return PEvalStatement();
     PEvalStatement result;
     if (phraseExpression[pos]=="*") {
+        //deference
         pos++; //skip "*"
-        result = doEvalCCast(
+        result = doEvalTypeCast(
                     fileName,
                     phraseExpression,
                     pos,
@@ -4446,9 +4927,7 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
     //                        qDebug()<<"typeName"<<typeName<<lastResult->baseStatement->type<<lastResult->baseStatement->command;
                         PStatement typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                         if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
+                            result = doCreateTypedEvalVar(fileName,typeName,parentScope, result->baseStatement);
                         } else {
                             result = PEvalStatement();
                         }
@@ -4457,9 +4936,7 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
     //                        qDebug()<<"typeName"<<typeName<<lastResult->baseStatement->type<<lastResult->baseStatement->command;
                         PStatement typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                         if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
+                            result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
                         } else {
                             result = PEvalStatement();
                         }
@@ -4481,9 +4958,7 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
     //                    qDebug()<<"typeName"<<typeName;
                         typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                         if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
+                            result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
                         } else {
                             result = PEvalStatement();
                         }
@@ -4493,8 +4968,9 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
                 result->pointerLevel--;
         }
     } else if (phraseExpression[pos]=="&") {
+        //Address-of
         pos++; //skip "&"
-        result = doEvalCCast(
+        result = doEvalTypeCast(
                     fileName,
                     phraseExpression,
                     pos,
@@ -4506,8 +4982,9 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
         }
     } else if (phraseExpression[pos]=="++"
                || phraseExpression[pos]=="--") {
+        // Prefix increment and decrement
         pos++; //skip "++" or "--"
-        result = doEvalCCast(
+        result = doEvalTypeCast(
                     fileName,
                     phraseExpression,
                     pos,
@@ -4515,6 +4992,7 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
                     previousResult,
                     freeScoped);
     } else if (phraseExpression[pos]=="(") {
+        //Type Cast
         //parse
         int startPos = pos;
         pos++;
@@ -4525,7 +5003,8 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
                     pos,
                     scope,
                     PEvalStatement(),
-                    true);
+                    true,
+                    false);
 //        qDebug()<<pos;
         if (pos >= phraseExpression.length() || phraseExpression[pos]!=")") {
             return PEvalStatement();
@@ -4534,7 +5013,7 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
             pos++; // skip ")"
 //            qDebug()<<"parse type cast exp";
             //it's a type cast
-            result = doEvalCCast(fileName,
+            result = doEvalTypeCast(fileName,
                         phraseExpression,
                         pos,
                         scope,
@@ -4560,16 +5039,11 @@ PEvalStatement CppParser::doEvalCCast(const QString &fileName,
                 scope,
                 previousResult,
                 freeScoped);
-//    if (result) {
-//        qDebug()<<pos<<(int)result->kind<<result->baseType;
-//    } else {
-//        qDebug()<<"!!!!!!!!!!!not found";
-//    }
     return result;
 }
 
 PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
-                                                   QStringList &phraseExpression,
+                                                   const QStringList &phraseExpression,
                                                    int &pos,
                                                    const PStatement& scope,
                                                    const PEvalStatement& previousResult,
@@ -4593,21 +5067,13 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
         if (!result)
             break;
         if (phraseExpression[pos]=="++" || phraseExpression[pos]=="--") {
+            //Suffix/postfix increment and decrement
             pos++; //just skip it
         } else if (phraseExpression[pos] == "(") {
+            // Function call
             if (result->kind == EvalStatementKind::Type) {
-                pos++; // skip "("
-                PEvalStatement newResult = doEvalExpression(
-                            fileName,
-                            phraseExpression,
-                            pos,
-                            scope,
-                            PEvalStatement(),
-                            true);
-                if (newResult)
-                    newResult->assignType(result);
-                pos++; // skip ")"
-                result = newResult;
+                doSkipInExpression(phraseExpression,pos,"(",")");
+                result->kind = EvalStatementKind::Variable;
             } else if (result->kind == EvalStatementKind::Function) {
                 doSkipInExpression(phraseExpression,pos,"(",")");
 //                qDebug()<<"????"<<(result->baseStatement!=nullptr)<<(lastResult!=nullptr);
@@ -4628,9 +5094,7 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
                             if (!typeName.isEmpty())
                                 typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                             if (typeStatement) {
-                                result = doCreateEvalType(fileName,typeName,parentScope);
-                                result->definitionString = typeName;
-                                result->kind = EvalStatementKind::Variable;
+                                result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
                                 lastResult = result;
                             } else {
                                 return PEvalStatement();
@@ -4647,71 +5111,101 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
                             if (!typeName.isEmpty())
                                 typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                             if (typeStatement) {
-                                result = doCreateEvalType(fileName,typeName,parentScope);
-                                result->definitionString = typeName;
-                                result->kind = EvalStatementKind::Variable;
+                                result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
                                 lastResult = result;
                             } else {
                                 return PEvalStatement();
                             }
                         }
                     }
-
                 }
+//                qDebug()<<"baseType:"<<result->baseType;
+//                if (result->baseStatement)
+//                    qDebug()<<"baseStatement"<<result->baseStatement->fullName;
+//                if (result->typeStatement)
+//                    qDebug()<<"typeStatement"<<result->typeStatement->fullName;
+//                if (result->effectiveTypeStatement)
+//                    qDebug()<<"typeStatement"<<result->effectiveTypeStatement->fullName;
                 result->kind = EvalStatementKind::Variable;
-            } else
+            } else if(result->kind == EvalStatementKind::Variable
+                      && result->effectiveTypeStatement
+                      && result->effectiveTypeStatement->kind == StatementKind::Class) {
+                //overload of operator ()
+                const StatementMap& statementMap = mStatementList.childrenStatements(result->effectiveTypeStatement);
+                if (statementMap.isEmpty())
+                    result = PEvalStatement();
+                else {
+                    PStatement operStatement = statementMap.value("operator()");
+                    if (operStatement) {
+                        doSkipInExpression(phraseExpression,pos,"(",")");
+                        PEvalStatement temp = doCreateEvalFunction(fileName,operStatement);
+                        result->effectiveTypeStatement = temp->effectiveTypeStatement;
+                        result->kind = EvalStatementKind::Variable;
+                    } else {
+                        result = PEvalStatement();
+                    }
+                }
+            } else {
                 result = PEvalStatement();
+            }
+        } else if (phraseExpression[pos] == "{") {
+            // Varaible Initialization
+            if (result->kind == EvalStatementKind::Type) {
+                doSkipInExpression(phraseExpression,pos,"{","}");
+                result->kind = EvalStatementKind::Variable;
+            }
         } else if (phraseExpression[pos] == "[") {
+            //Array subscripting
             //skip to "]"
             doSkipInExpression(phraseExpression,pos,"[","]");
-            if (result->pointerLevel>0)
-                result->pointerLevel--;
-            else {
-                PStatement typeStatement = result->effectiveTypeStatement;
-                if (typeStatement
-                        && result->kind == EvalStatementKind::Variable
-                        && result->baseStatement) {
-                    if (STLContainers.contains(typeStatement->fullName)) {
-                        PStatement parentScope = result->baseStatement->parentScope.lock();
-                        QString typeName;
-                        if (!lastResult || lastResult->definitionString.isEmpty())
-                            typeName = doFindFirstTemplateParamOf(fileName,result->baseStatement->type, parentScope);
-                        else
-                            typeName = doFindFirstTemplateParamOf(fileName,lastResult->definitionString,parentScope);
-                        typeStatement = doFindTypeDefinitionOf(fileName, typeName,
-                                                         parentScope);
-                        if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
-                            lastResult = result;
-                        } else {
-                            return PEvalStatement();
+            if (result->kind == EvalStatementKind::Type) {
+                // Array defintion
+                result->pointerLevel++;
+            } else if (result->kind == EvalStatementKind::Variable){
+                if (result->pointerLevel>0)
+                    result->pointerLevel--;
+                else {
+                    PStatement typeStatement = result->effectiveTypeStatement;
+                    if (typeStatement && result->baseStatement) {
+                        if (STLContainers.contains(typeStatement->fullName)) {
+                            PStatement parentScope = result->baseStatement->parentScope.lock();
+                            QString typeName;
+                            if (!lastResult || lastResult->definitionString.isEmpty())
+                                typeName = doFindFirstTemplateParamOf(fileName,result->baseStatement->type, parentScope);
+                            else
+                                typeName = doFindFirstTemplateParamOf(fileName,lastResult->definitionString,parentScope);
+                            typeStatement = doFindTypeDefinitionOf(fileName, typeName,
+                                                             parentScope);
+                            if (typeStatement) {
+                                result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
+                                lastResult = result;
+                            } else {
+                                return PEvalStatement();
+                            }
+                        } else if (STLMaps.contains(typeStatement->fullName)) {
+                            PStatement parentScope = result->baseStatement->parentScope.lock();
+                            QString typeName;
+                            if (!lastResult || lastResult->definitionString.isEmpty())
+                                typeName = doFindTemplateParamOf(fileName,result->baseStatement->type, 1,parentScope);
+                            else
+                                typeName = doFindTemplateParamOf(fileName,lastResult->definitionString,1,parentScope);
+                            typeStatement = doFindTypeDefinitionOf(fileName, typeName,
+                                                             parentScope);
+                            if (typeStatement) {
+                                result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
+                                lastResult = result;
+                            } else {
+                                return PEvalStatement();
+                            }
                         }
-                    } else if (STLMaps.contains(typeStatement->fullName)) {
-                        PStatement parentScope = result->baseStatement->parentScope.lock();
-                        QString typeName;
-                        if (!lastResult || lastResult->definitionString.isEmpty())
-                            typeName = doFindTemplateParamOf(fileName,result->baseStatement->type, 1,parentScope);
-                        else
-                            typeName = doFindTemplateParamOf(fileName,lastResult->definitionString,1,parentScope);
-                        typeStatement = doFindTypeDefinitionOf(fileName, typeName,
-                                                         parentScope);
-                        if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
-                            lastResult = result;
-                        } else {
-                            return PEvalStatement();
-                        }
-                    }
 
-                } else {
-                    return PEvalStatement();
+                    } else {
+                        return PEvalStatement();
+                    }
                 }
             }
         } else if (phraseExpression[pos] == ".") {
+            //Structure and union member access
             pos++;
             lastResult = result;
             result = doEvalScopeResolution(
@@ -4722,6 +5216,7 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
                         result,
                         false);
         } else if (phraseExpression[pos] == "->") {
+            // Structure and union member access through pointer
             pos++;
             if (result->pointerLevel==0) {
                 // iterator
@@ -4734,9 +5229,7 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
 //                        qDebug()<<"typeName"<<typeName<<lastResult->baseStatement->type<<lastResult->baseStatement->command;
                         PStatement typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                         if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
+                            result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
                         } else {
                             result = PEvalStatement();
                         }
@@ -4745,9 +5238,7 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
     //                        qDebug()<<"typeName"<<typeName<<lastResult->baseStatement->type<<lastResult->baseStatement->command;
                         PStatement typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                         if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
+                            result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
                         } else {
                             result = PEvalStatement();
                         }
@@ -4768,9 +5259,7 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
     //                    qDebug()<<"typeName"<<typeName;
                         typeStatement=doFindTypeDefinitionOf(fileName, typeName,parentScope);
                         if (typeStatement) {
-                            result = doCreateEvalType(fileName,typeName,parentScope);
-                            result->definitionString=typeName;
-                            result->kind = EvalStatementKind::Variable;
+                            result = doCreateTypedEvalVar(fileName,typeName,parentScope,result->baseStatement);
                         } else {
                             return PEvalStatement();
                         }
@@ -4794,7 +5283,7 @@ PEvalStatement CppParser::doEvalMemberAccess(const QString &fileName,
 }
 
 PEvalStatement CppParser::doEvalScopeResolution(const QString &fileName,
-                                                   QStringList &phraseExpression,
+                                                   const QStringList &phraseExpression,
                                                    int &pos,
                                                    const PStatement& scope,
                                                    const PEvalStatement& previousResult,
@@ -4849,7 +5338,7 @@ PEvalStatement CppParser::doEvalScopeResolution(const QString &fileName,
 }
 
 PEvalStatement CppParser::doEvalTerm(const QString &fileName,
-                                                   QStringList &phraseExpression,
+                                                   const QStringList &phraseExpression,
                                                    int &pos,
                                                    const PStatement& scope,
                                                    const PEvalStatement& previousResult,
@@ -4863,10 +5352,9 @@ PEvalStatement CppParser::doEvalTerm(const QString &fileName,
     PEvalStatement result;
     if (pos>=phraseExpression.length())
         return result;
-//    qDebug()<<"eval term"<<phraseExpression[pos];
     if (phraseExpression[pos]=="(") {
         pos++;
-        result = doEvalExpression(fileName,phraseExpression,pos,scope,PEvalStatement(),freeScoped);
+        result = doEvalExpression(fileName,phraseExpression,pos,scope,PEvalStatement(),freeScoped,false);
         if (pos >= phraseExpression.length() || phraseExpression[pos]!=")")
             return PEvalStatement();
         else {
@@ -4885,10 +5373,9 @@ PEvalStatement CppParser::doEvalTerm(const QString &fileName,
                 break;
             pos++;
         }
-
         if (pos>=phraseExpression.length() || phraseExpression[pos]==")")
             return result;
-        if (mCppKeywords.contains(phraseExpression[pos])) {
+        if (mCppTypeKeywords.contains(phraseExpression[pos])) {
             result = doCreateEvalType(phraseExpression[pos]);
             pos++;
         } else if (isIdentifier(phraseExpression[pos])) {
@@ -4918,41 +5405,46 @@ PEvalStatement CppParser::doEvalTerm(const QString &fileName,
 //                }
             }
             pos++;
-            if (statement && statement->kind == StatementKind::skConstructor) {
+            if (statement && statement->kind == StatementKind::Constructor) {
                 statement = statement->parentScope.lock();
+            }
+            while (statement && statement->kind == StatementKind::Alias) {
+                statement = doFindAliasedStatement(statement);
             }
             if (statement) {
                 switch (statement->kind) {
-                case StatementKind::skNamespace:
+                case StatementKind::Namespace:
                     result = doCreateEvalNamespace(statement);
                     break;
-                case StatementKind::skAlias: {
-                    statement = doFindAliasedStatement(statement);
-                    if (statement)
-                        result = doCreateEvalType(fileName,statement);
-                }
+                case StatementKind::NamespaceAlias:
+                    result = doFindAliasedNamespace(statement);
                     break;
-                case StatementKind::skVariable:
-                case StatementKind::skParameter:
+                case StatementKind::Variable:
+                case StatementKind::Parameter:
                     result = doCreateEvalVariable(fileName,statement, previousResult?previousResult->templateParams:"",scope);
                     break;
-                case StatementKind::skEnumType:
-                case StatementKind::skClass:
-                case StatementKind::skEnumClassType:
-                case StatementKind::skTypedef:
+                case StatementKind::Class:
+                    statement = doFindNoTemplateSpecializationClass(statement);
+                    [[fallthrough]];
+                case StatementKind::EnumType:
+                case StatementKind::EnumClassType:
+                case StatementKind::Typedef:
                     result = doCreateEvalType(fileName,statement);
                     break;
-                case StatementKind::skFunction:
+                case StatementKind::Function: {
+                    if (statement->type=="auto") {
+                        PStatement scopeStatement = statement->parentScope.lock();
+                        if (scopeStatement) {
+                            StatementMap children = mStatementList.childrenStatements(scopeStatement);
+                            QList<PStatement> lstFuncs = children.values(statement->command);
+                            for (const PStatement& func:lstFuncs) {
+                                if (func->type!="auto")
+                                    statement=func;
+                            }
+                        }
+                    }
                     result = doCreateEvalFunction(fileName,statement);
-                    break;
-                case StatementKind::skPreprocessor:
-                    // qDebug()<<"before"<<phraseExpression;
-                    pos--;
-                    if (expandMacro(phraseExpression,pos,statement)) {
-                        // qDebug()<<"after"<<phraseExpression;
-                        result = doEvalExpression(fileName,phraseExpression,pos,scope,previousResult,freeScoped);
-                    } else
-                        result = PEvalStatement();
+                }
                     break;
                 default:
                     result = PEvalStatement();
@@ -4990,6 +5482,15 @@ PEvalStatement CppParser::doEvalTerm(const QString &fileName,
 //            qDebug()<<"term kind:"<<(int)result->kind;
 //        }
         if (result && result->kind == EvalStatementKind::Type) {
+            if (result->templateParams.isEmpty()) {
+                if (pos<phraseExpression.length() && phraseExpression[pos]=='<') {
+                    int oldPos = pos;
+                    doSkipInExpression(phraseExpression,pos,"<",">");
+                    for(int i=oldPos;i<pos;i++) {
+                        result->templateParams+=phraseExpression[i];
+                    }
+                }
+            }
             //skip "struct", "const", "static", etc
             while(pos < phraseExpression.length()) {
                 QString token = phraseExpression[pos];
@@ -5001,23 +5502,32 @@ PEvalStatement CppParser::doEvalTerm(const QString &fileName,
                 pos++;
             }
             result->pointerLevel = pointerLevel;
+        } else if (result && result->kind == EvalStatementKind::Function
+                   && pos<phraseExpression.length()
+                   && phraseExpression[pos]=='<') {
+            result->templateParams = "";
+            int oldPos = pos;
+            doSkipInExpression(phraseExpression,pos,"<",">");
+            for(int i=oldPos;i<pos;i++) {
+                result->templateParams+=phraseExpression[i];
+            }
         }
     }
-//    qDebug()<<pos<<" term end";
-//    if (!result) {
-//        qDebug()<<"not found !!!!";
-//    }
-
     return result;
 }
 
-bool CppParser::expandMacro(QStringList &phraseExpression, int &pos, const PStatement &macro) const
+bool CppParser::expandMacro(QStringList &phraseExpression, int pos, PStatement macro, QList< QSet<QString> > &usedMacros) const
 {
     QString s;
+    QSet<QString> used = usedMacros[pos];
     if (macro->args.isEmpty()) {
         s=macro->value;
         phraseExpression.removeAt(pos);
+        usedMacros.removeAt(pos);
     } else {
+        //don't expand
+        if (pos+1 >= phraseExpression.length() || phraseExpression[pos+1]!="(")
+            return true;
         QString args=macro->args.mid(1,macro->args.length()-2).trimmed(); // remove '(' ')'
 
         if(args=="")
@@ -5096,13 +5606,14 @@ bool CppParser::expandMacro(QStringList &phraseExpression, int &pos, const PStat
         }
         for (int j=pos;j<=i;j++) {
             phraseExpression.removeAt(pos);
+            usedMacros.removeAt(pos);
         }
     }
 
+    used.insert(macro->command);
     QSynedit::CppSyntaxer syntaxer;
     syntaxer.resetState();
     syntaxer.setLine(s,0);
-    int i=0;
     while (!syntaxer.eol()) {
         QString token=syntaxer.getToken();
         QSynedit::PTokenAttribute attr = syntaxer.getTokenAttribute();
@@ -5111,15 +5622,14 @@ bool CppParser::expandMacro(QStringList &phraseExpression, int &pos, const PStat
         case QSynedit::TokenType::Comment:
             break;
         case QSynedit::TokenType::Identifier:
-            if (token!=macro->command)
-                phraseExpression.insert(pos+i,token);
-            else
-                phraseExpression.insert(pos+i,token+"_expanded");
-            i++;
+            phraseExpression.insert(pos,token);
+            usedMacros.insert(pos,used);
+            pos++;
             break;
         default:
-            phraseExpression.insert(pos+i,token);
-            i++;
+            phraseExpression.insert(pos,token);
+            usedMacros.insert(pos,used);
+            pos++;
         }
         syntaxer.next();
     }
@@ -5136,6 +5646,30 @@ PEvalStatement CppParser::doCreateEvalNamespace(const PStatement &namespaceState
                 PStatement(),
                 namespaceStatement,
                 namespaceStatement);
+}
+
+PEvalStatement CppParser::doFindAliasedNamespace(const PStatement &namespaceAlias) const
+{
+    QStringList expList;
+    QString s = namespaceAlias->type;
+    int pos = s.indexOf("::");
+    while (pos>=0) {
+        expList.append(s.left(pos));
+        expList.append("::");
+        s = s.mid(pos+2);
+        pos = s.indexOf("::");
+    }
+    expList.append(s);
+    pos=0;
+    return doEvalExpression(
+                namespaceAlias->fileName,
+                expList,
+                pos,
+                namespaceAlias->parentScope.lock(),
+                PEvalStatement(),
+                true,
+                false
+                );
 }
 
 PEvalStatement CppParser::doCreateEvalType(const QString &fileName, const QString &typeName, const PStatement& parentScope) const
@@ -5167,12 +5701,12 @@ PEvalStatement CppParser::doCreateEvalType(const QString& fileName,const PStatem
 {
     if (!typeStatement)
         return PEvalStatement();
-    if (typeStatement->kind == StatementKind::skTypedef) {
+    if (typeStatement->kind == StatementKind::Typedef) {
         QString baseType;
         int pointerLevel=0;
         QString templateParams;
         PStatement tempStatement;
-        PStatement effetiveTypeStatement  = doParseEvalTypeInfo(
+        PStatement effectiveTypeStatement  = doParseEvalTypeInfo(
                     fileName,
                     typeStatement->parentScope.lock(),
                     typeStatement->type + typeStatement->args,
@@ -5180,12 +5714,14 @@ PEvalStatement CppParser::doCreateEvalType(const QString& fileName,const PStatem
                     tempStatement,
                     pointerLevel,
                     templateParams);
+        if (effectiveTypeStatement && effectiveTypeStatement->kind == StatementKind::Class)
+            effectiveTypeStatement = doFindNoTemplateSpecializationClass(effectiveTypeStatement);
         return std::make_shared<EvalStatement>(
                     baseType,
                     EvalStatementKind::Type,
                     PStatement(),
                     typeStatement,
-                    effetiveTypeStatement,
+                    effectiveTypeStatement,
                     pointerLevel,
                     templateParams
                     );
@@ -5207,6 +5743,15 @@ PEvalStatement CppParser::doCreateEvalType(const QString &primitiveType) const
                 PStatement(),
                 PStatement(),
                 PStatement());
+}
+
+PEvalStatement CppParser::doCreateTypedEvalVar(const QString &fileName, const QString &typeName, const PStatement &parentScope, const PStatement &baseStatement) const
+{
+    PEvalStatement result = doCreateEvalType(fileName,typeName,parentScope);
+    result->definitionString=typeName;
+    result->kind = EvalStatementKind::Variable;
+    result->baseStatement = baseStatement;
+    return result;
 }
 
 PEvalStatement CppParser::doCreateEvalVariable(
@@ -5281,10 +5826,13 @@ PEvalStatement CppParser::doCreateEvalFunction(
     int pointerLevel=0;
     QString templateParams;
     PStatement typeStatement;
+    QString type = funcStatement->type;
+    if (funcStatement->fullName == "std::make_unique")
+        type = "unique_ptr";
     PStatement effetiveTypeStatement = doParseEvalTypeInfo(
                 fileName,
                 funcStatement->parentScope.lock(),
-                funcStatement->type,
+                type,
                 baseType,
                 typeStatement,
                 pointerLevel,
@@ -5387,6 +5935,8 @@ PStatement CppParser::doParseEvalTypeInfo(
                 templateLevel++;
             } else if (token == ">") {
                 templateLevel--;
+            } else if (token == ">>") {
+                templateLevel-=2;
             }
             templateParams += token;
         }
@@ -5400,11 +5950,13 @@ PStatement CppParser::doParseEvalTypeInfo(
         }
         position--;
     }
-    typeStatement = doFindStatementOf(fileName,baseType,scope);
+    QStringList expression = splitExpression(baseType);
+    typeStatement = doFindStatementOf(fileName,expression,scope);
     PStatement effectiveTypeStatement = typeStatement;
     int level=0;
-    while (effectiveTypeStatement && (effectiveTypeStatement->kind == StatementKind::skTypedef
-           || effectiveTypeStatement->kind == StatementKind::skPreprocessor)) {
+    while (effectiveTypeStatement && (effectiveTypeStatement->kind == StatementKind::Typedef
+                                      || effectiveTypeStatement->kind == StatementKind::Alias
+                                      || effectiveTypeStatement->kind == StatementKind::Preprocessor)) {
         if (level >20) // prevent infinite loop
             break;
         level++;
@@ -5441,6 +5993,7 @@ PStatement CppParser::doParseEvalTypeInfo(
                 } else if (token == ">") {
                     templateLevel--;
                 }
+                templateParams += token;
             }
             syntaxer.next();
         }
@@ -5490,12 +6043,10 @@ void CppParser::internalInvalidateFile(const QString &fileName)
         return;
 
     // remove its include files list
-    PFileIncludes p = findFileIncludes(fileName, true);
+    PParsedFileInfo p = mPreprocessor.findFileInfo(fileName);
     if (p) {
-        //fPreprocessor.InvalidDefinesInFile(FileName); //we don't need this, since we reset defines after each parse
-        //p->includeFiles.clear();
-        //p->usings.clear();
-        for (PStatement& statement:p->statements) {
+        //invalidDefinesInFile(FileName); //we don't need this, since we reset defines after each parse
+        for(PStatement statement:p->statements()) {
             if (statement->fileName==fileName) {
                 mStatementList.deleteStatement(statement);
             } else {
@@ -5504,13 +6055,22 @@ void CppParser::internalInvalidateFile(const QString &fileName)
                 statement->definitionLine = statement->line;
             }
         }
-        p->statements.clear();
+
+        //invalidate all handledInheritances
+        for (std::weak_ptr<ClassInheritanceInfo> pWeakInfo: p->handledInheritances()) {
+            PClassInheritanceInfo info = pWeakInfo.lock();
+            if (info) {
+                info->handled = false;
+            }
+        }
+
+        mPreprocessor.removeFileInfo(fileName);
     }
 
     //remove all statements from namespace cache
-    const QList<QString>& keys=mNamespaces.keys();
-    for (const QString& key:keys) {
-        PStatementList statements = mNamespaces.value(key);
+    for (auto it=mNamespaces.begin();it!=mNamespaces.end();++it) {
+        QString key = it.key();
+        PStatementList statements = it.value();
         for (int i=statements->size()-1;i>=0;i--) {
             PStatement statement = statements->at(i);
             if (statement->fileName == fileName) {
@@ -5521,7 +6081,12 @@ void CppParser::internalInvalidateFile(const QString &fileName)
             mNamespaces.remove(key);
         }
     }
-
+    // class inheritance
+    // invalid class inheritance infos (derived class is not valid) whould be auto removed in handleInheritances()
+    // foreach (const PClassInheritanceInfo& info, mClassInheritances) {
+    //     if (info->handled && info->parentClassFilename == fileName)
+    //         info->handled = false;
+    // }
     // delete it from scannedfiles
     mPreprocessor.removeScannedFile(fileName);
 }
@@ -5538,9 +6103,9 @@ QSet<QString> CppParser::calculateFilesToBeReparsed(const QString &fileName)
         return QSet<QString>();
     QSet<QString> result;
     result.insert(fileName);
-    foreach (const QString& file, mProjectFiles) {
-        PFileIncludes fileIncludes = mPreprocessor.includesList().value(file,PFileIncludes());
-        if (fileIncludes && fileIncludes->includeFiles.contains(fileName)) {
+    foreach (const QString& file, mPreprocessor.scannedFiles()) {
+        PParsedFileInfo fileInfo = mPreprocessor.findFileInfo(file);
+        if (fileInfo && fileInfo->including(fileName)) {
             result.insert(file);
         }
     }
@@ -5584,10 +6149,10 @@ void CppParser::scanMethodArgs(const PStatement& functionStatement, int argStart
                             "",
                             "",
                             mTokenizer[i+1]->line,
-                            StatementKind::skParameter,
+                            StatementKind::Parameter,
                             StatementScope::Local,
                             StatementAccessibility::None,
-                            StatementProperty::spHasDefinition);
+                            StatementProperty::HasDefinition);
             }
             i=argEnd+1;
             words.clear();
@@ -5597,15 +6162,27 @@ void CppParser::scanMethodArgs(const PStatement& functionStatement, int argStart
             addMethodParameterStatement(words,mTokenizer[i]->line,functionStatement);
             i=skipAssignment(i,argEnd);
         } else if (mTokenizer[i]->text=="::") {
-            words.append(mTokenizer[i]->text);
+            int lastIdx=words.count()-1;
+            if (lastIdx>=0 && words[lastIdx]!="const") {
+                words[lastIdx]=words[lastIdx]+mTokenizer[i]->text;
+            } else
+                words.append(mTokenizer[i]->text);
             i++;
         } else if (mTokenizer[i]->text==',') {
            addMethodParameterStatement(words,mTokenizer[i]->line,functionStatement);
            i++;
            words.clear();
+        } else if (isIdentChar(mTokenizer[i]->text[0])) {
+            // identifier
+            int lastIdx=words.count()-1;
+            if (lastIdx>=0 && words[lastIdx].endsWith("::")) {
+                words[lastIdx]=words[lastIdx]+mTokenizer[i]->text;
+            } else
+                words.append(mTokenizer[i]->text);
+            i++;
         } else if (isWordChar(mTokenizer[i]->text[0])) {
-            QString cmd=mTokenizer[i]->text;
-            words.append(cmd);
+            // * &
+            words.append(mTokenizer[i]->text);
             i++;
         } else if (mTokenizer[i]->text.startsWith("[")) {
             if (!words.isEmpty()) {
@@ -5618,8 +6195,35 @@ void CppParser::scanMethodArgs(const PStatement& functionStatement, int argStart
         }
     }
     addMethodParameterStatement(words,mTokenizer[i-1]->line,functionStatement);
+}
 
-
+QSet<QString> CppParser::parseLambdaCaptures(int index)
+{
+    QString s = mTokenizer[index]->text;
+    QString word;
+    QSet<QString> result;
+    //skip '[' ']'
+    for (int i=1;i<s.length()-1;i++) {
+        switch(s[i].unicode()){
+        case ',':
+            if (!word.isEmpty()) {
+                result.insert(word);
+                word.clear();
+            }
+            break;
+        case ' ':
+        case '\t':
+        case '*':
+            break;
+        default:
+            if (word=="&")
+                word.clear();
+            word+=s[i];
+        }
+    }
+    if (!word.isEmpty())
+        result.insert(word);
+    return result;
 }
 
 QString CppParser::splitPhrase(const QString &phrase, QString &sClazz,
@@ -5816,9 +6420,9 @@ bool CppParser::isNotFuncArgs(int startIndex)
 bool CppParser::isNamedScope(StatementKind kind) const
 {
     switch(kind) {
-    case StatementKind::skClass:
-    case StatementKind::skNamespace:
-    case StatementKind::skFunction:
+    case StatementKind::Class:
+    case StatementKind::Namespace:
+    case StatementKind::Function:
         return true;
     default:
         return false;
@@ -5828,10 +6432,10 @@ bool CppParser::isNamedScope(StatementKind kind) const
 bool CppParser::isTypeStatement(StatementKind kind) const
 {
     switch(kind) {
-    case StatementKind::skClass:
-    case StatementKind::skTypedef:
-    case StatementKind::skEnumClassType:
-    case StatementKind::skEnumType:
+    case StatementKind::Class:
+    case StatementKind::Typedef:
+    case StatementKind::EnumClassType:
+    case StatementKind::EnumType:
         return true;
     default:
         return false;
@@ -5843,11 +6447,9 @@ void CppParser::updateSerialId()
     mSerialId = QString("%1 %2").arg(mParserId).arg(mSerialCount);
 }
 
-int CppParser::indexOfNextSemicolon(int index, int endIndex)
+int CppParser::indexOfNextSemicolon(int index, int maxIndex)
 {
-    if (endIndex<0)
-        endIndex=mTokenizer.tokenCount();
-    while (index<endIndex) {
+    while (index<maxIndex) {
         switch(mTokenizer[index]->text[0].unicode()) {
         case ';':
             return index;
@@ -5861,15 +6463,14 @@ int CppParser::indexOfNextSemicolon(int index, int endIndex)
     return index;
 }
 
-int CppParser::indexOfNextPeriodOrSemicolon(int index, int endIndex)
+int CppParser::indexOfNextPeriodOrSemicolon(int index, int maxIndex)
 {
-    if (endIndex<0)
-        endIndex=mTokenizer.tokenCount();
-    while (index<endIndex) {
+    while (index<maxIndex) {
         switch(mTokenizer[index]->text[0].unicode()) {
         case ';':
         case ',':
         case '}':
+        case ')':
             return index;
         case '(':
             index = mTokenizer[index]->matchIndex+1;
@@ -5881,10 +6482,9 @@ int CppParser::indexOfNextPeriodOrSemicolon(int index, int endIndex)
     return index;
 }
 
-int CppParser::indexOfNextSemicolonOrLeftBrace(int index)
+int CppParser::indexOfNextSemicolonOrLeftBrace(int index, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
-    while (index<tokenCount) {
+    while (index<maxIndex) {
         switch(mTokenizer[index]->text[0].unicode()) {
         case ';':
         case '{':
@@ -5899,10 +6499,9 @@ int CppParser::indexOfNextSemicolonOrLeftBrace(int index)
     return index;
 }
 
-int CppParser::indexOfNextColon(int index)
+int CppParser::indexOfNextColon(int index, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
-    while (index<tokenCount) {
+    while (index<maxIndex) {
         QString s =mTokenizer[index]->text;
         switch(s[0].unicode()) {
         case ':':
@@ -5921,10 +6520,9 @@ int CppParser::indexOfNextColon(int index)
     return index;
 }
 
-int CppParser::indexOfNextLeftBrace(int index)
+int CppParser::indexOfNextLeftBrace(int index, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
-    while (index<tokenCount) {
+    while (index<maxIndex) {
         switch(mTokenizer[index]->text[0].unicode()) {
         case '{':
             return index;
@@ -5938,10 +6536,9 @@ int CppParser::indexOfNextLeftBrace(int index)
     return index;
 }
 
-int CppParser::indexPassParenthesis(int index)
+int CppParser::indexPassParenthesis(int index, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
-    while (index<tokenCount) {
+    while (index<maxIndex) {
         if (mTokenizer[index]->text=='(') {
             return mTokenizer[index]->matchIndex+1;
         }
@@ -5950,28 +6547,27 @@ int CppParser::indexPassParenthesis(int index)
     return index;
 }
 
-//int CppParser::indexPassBraces(int index)
-//{
-//    int tokenCount = mTokenizer.tokenCount();
-//    while (index<tokenCount) {
-//        switch(mTokenizer[index]->text[0].unicode()) {
-//        case '{':
-//            return mTokenizer[index]->matchIndex+1;
-//        case '(':
-//            index = mTokenizer[index]->matchIndex+1;
-//            break;
-//        default:
-//            index++;
-//        }
-//    }
-//    return index;
-//}
-
-void CppParser::skipNextSemicolon(int index)
+int CppParser::indexOfNextRightParenthesis(int index, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
+    while (index<maxIndex) {
+        QString s =mTokenizer[index]->text;
+        switch(s[0].unicode()) {
+        case ')':
+            return index;
+        case '(':
+            index = mTokenizer[index]->matchIndex+1;
+            break;
+        default:
+            index++;
+        }
+    }
+    return index;
+}
+
+void CppParser::skipNextSemicolon(int index, int endIndex)
+{
     mIndex=index;
-    while (mIndex<tokenCount) {
+    while (mIndex<endIndex) {
         switch(mTokenizer[mIndex]->text[0].unicode()) {
         case ';':
             mIndex++;
@@ -5988,12 +6584,10 @@ void CppParser::skipNextSemicolon(int index)
     }
 }
 
-int CppParser::moveToEndOfStatement(int index, bool checkLambda, int endIndex)
+int CppParser::moveToEndOfStatement(int index, bool checkLambda, int maxIndex)
 {
     int startIndex=index;
-    if (endIndex<0)
-        endIndex=mTokenizer.tokenCount();
-    if (index>=endIndex)
+    if (index>=maxIndex)
         return index;
     index--; // compensate for the first loop
 
@@ -6001,7 +6595,7 @@ int CppParser::moveToEndOfStatement(int index, bool checkLambda, int endIndex)
     do {
         index++;
         bool stop = false;
-        while (index<endIndex && !stop) {
+        while (index<maxIndex && !stop) {
             switch(mTokenizer[index]->text[0].unicode()) {
             case ';':
                 stop=true;
@@ -6025,8 +6619,8 @@ int CppParser::moveToEndOfStatement(int index, bool checkLambda, int endIndex)
                 index++;
             }
         }
-    } while (index<mTokenizer.tokenCount() && mTokenizer[index]->text=='=');
-    if (index<endIndex && checkLambda) {
+    } while (index<maxIndex && mTokenizer[index]->text=='=');
+    if (index<maxIndex && checkLambda) {
         while (mTokenizer.lambdasCount()>0 && mTokenizer.indexOfFirstLambda()<index) {
             int i=mTokenizer.indexOfFirstLambda();
             mTokenizer.removeFirstLambda();
@@ -6040,11 +6634,10 @@ int CppParser::moveToEndOfStatement(int index, bool checkLambda, int endIndex)
     return index;
 }
 
-void CppParser::skipParenthesis(int index)
+void CppParser::skipParenthesis(int index, int maxIndex)
 {
-    int tokenCount = mTokenizer.tokenCount();
     mIndex=index;
-    while (mIndex<tokenCount) {
+    while (mIndex<maxIndex) {
         if (mTokenizer[mIndex]->text=='(') {
             mIndex=mTokenizer[mIndex]->matchIndex+1;
             return;
@@ -6053,17 +6646,19 @@ void CppParser::skipParenthesis(int index)
     }
 }
 
-int CppParser::skipAssignment(int index, int endIndex)
+int CppParser::skipAssignment(int index, int maxIndex)
 {
     int startIndex=index;
     bool stop=false;
-    while (index<endIndex && !stop) {
+    while (index<maxIndex && !stop) {
         switch(mTokenizer[index]->text[0].unicode()) {
         case ';':
         case ',':
-        case '{':
+        case '}':
+        case ')':
             stop=true;
             break;
+        case '{':
         case '(':
             index = mTokenizer[index]->matchIndex+1;
             break;
@@ -6080,7 +6675,7 @@ int CppParser::skipAssignment(int index, int endIndex)
             }
         }
     }
-    return (index<endIndex)?index:endIndex;
+    return (index<maxIndex)?index:maxIndex;
 }
 
 QString CppParser::mergeArgs(int startIndex, int endIndex)
@@ -6116,6 +6711,39 @@ void CppParser::parseCommandTypeAndArgs(QString &command, QString &typeSuffix, Q
 
 }
 
+QString CppParser::expandMacro(const QString &text) const
+{
+    QSet<QString> usedMacros;
+    return mPreprocessor.expandMacros(text, usedMacros);
+}
+
+QStringList CppParser::splitExpression(const QString &expr)
+{
+    QStringList result;
+    QSynedit::CppSyntaxer syntaxer;
+    syntaxer.resetState();
+    QStringList lines = textToLines(expr);
+    for(int i=0;i<lines.length();i++) {
+        syntaxer.setLine(lines[i],i+1);
+        while(!syntaxer.eol()) {
+            QSynedit::TokenType tokenType = syntaxer.getTokenAttribute()->tokenType();
+            QString token = syntaxer.getToken();
+            if (tokenType == QSynedit::TokenType::Operator) {
+                if ( token == ">>" ) {
+                    result.append(">");
+                    result.append(">");
+                } else {
+                    result.append(token);
+                }
+            } else if (tokenType!=QSynedit::TokenType::Comment
+                    && tokenType!=QSynedit::TokenType::Space)
+                result.append(token);
+            syntaxer.next();
+        }
+    }
+    return result;
+}
+
 const QSet<QString> &CppParser::projectFiles() const
 {
     return mProjectFiles;
@@ -6134,7 +6762,17 @@ ParserLanguage CppParser::language() const
 
 void CppParser::setLanguage(ParserLanguage newLanguage)
 {
-    mLanguage = newLanguage;
+    if (mLanguage != newLanguage) {
+        mLanguage = newLanguage;
+        mCppKeywords = CppKeywords;
+        mCppTypeKeywords = CppTypeKeywords;
+#ifdef ENABLE_SDCC
+        if (mLanguage == ParserLanguage::SDCC) {
+            mCppKeywords.insert(SDCCKeywords);
+            mCppTypeKeywords.unite(SDCCTypeKeywords);
+        }
+#endif
+    }
 }
 
 
@@ -6233,8 +6871,8 @@ CppFileParserThread::CppFileParserThread(
 
 void CppFileParserThread::run()
 {
-    if (mParser && !mParser->parsing()) {
-        mParser->parseFile(mFileName,mInProject,mOnlyIfNotParsed,mUpdateView);
+    if (mParser) {
+        mParser->parseFile(mFileName,mInProject,mOnlyIfNotParsed,mUpdateView,mParser);
     }
 }
 
@@ -6261,6 +6899,7 @@ void parseFile(PCppParser parser, const QString& fileName, bool inProject, bool 
         return;
     if (!parser->enabled())
         return;
+//    qDebug()<<"parsing "<<fileName;
     //delete when finished
     CppFileParserThread* thread = new CppFileParserThread(parser,fileName,inProject,onlyIfNotParsed,updateView);
     thread->connect(thread,
