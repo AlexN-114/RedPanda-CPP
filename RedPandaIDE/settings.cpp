@@ -2849,11 +2849,12 @@ QByteArray Settings::CompilerSet::getCompilerOutput(const QString &binDir, const
     env.insert("LANG","en");
     QString path = binDir;
     env.insert("PATH",path);
-    QByteArray result = runAndGetOutput(
+    auto [result, _, errorMessage] = runAndGetOutput(
                 includeTrailingPathDelimiter(binDir)+binFile,
                 binDir,
                 arguments,
                 QByteArray(),
+                false,
                 false,
                 env);
     return result.trimmed();
@@ -3881,7 +3882,7 @@ QString Settings::Environment::AStylePath() const
 {
     QString path = mAStylePath;
     if (path.isEmpty())
-        path = includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+"astyle";
+        path = includeTrailingPathDelimiter(pSettings->dirs().appLibexecDir())+ASTYLE_PROGRAM;
     else
         path = replacePrefix(path, "%*APP_DIR*%", pSettings->dirs().appDir());
     return path;

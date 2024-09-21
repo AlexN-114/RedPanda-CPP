@@ -56,6 +56,7 @@
 #include <QDebug>
 #include "project.h"
 #include <qt_utils/charsetinfo.h>
+#include "utils/escape.h"
 
 QHash<ParserLanguage,std::weak_ptr<CppParser>> Editor::mSharedParsers;
 
@@ -1184,7 +1185,6 @@ void Editor::mouseMoveEvent(QMouseEvent *event)
         }
         return;
     }
-
     QSynedit::QSynEdit::mouseMoveEvent(event);
 }
 
@@ -1486,23 +1486,21 @@ void Editor::mouseReleaseEvent(QMouseEvent *event)
     // if ctrl+clicked
     if ((event->modifiers() == Qt::ControlModifier)
             && (event->button() == Qt::LeftButton)) {
-        if (!selAvail() ) {
-            QSynedit::BufferCoord p;
-            if (mParser && pointToCharLine(event->pos(),p)) {
-                cancelHoverLink();
-                QString sLine = lineText(p.line);
-                if (mParser->isIncludeNextLine(sLine)) {
-                    QString filename = mParser->getHeaderFileName(mFilename,sLine, true);
-                    pMainWindow->openFile(filename);
-                    return;
-                } if (mParser->isIncludeLine(sLine)) {
-                    QString filename = mParser->getHeaderFileName(mFilename,sLine);
-                    pMainWindow->openFile(filename);
-                    return;
-                } else if (mParser->enabled()) {
-                    gotoDefinition(p);
-                    return;
-                }
+        QSynedit::BufferCoord p;
+        if (mParser && pointToCharLine(event->pos(),p)) {
+            cancelHoverLink();
+            QString sLine = lineText(p.line);
+            if (mParser->isIncludeNextLine(sLine)) {
+                QString filename = mParser->getHeaderFileName(mFilename,sLine, true);
+                pMainWindow->openFile(filename);
+                return;
+            } if (mParser->isIncludeLine(sLine)) {
+                QString filename = mParser->getHeaderFileName(mFilename,sLine);
+                pMainWindow->openFile(filename);
+                return;
+            } else if (mParser->enabled()) {
+                gotoDefinition(p);
+                return;
             }
         }
     }
@@ -4617,16 +4615,6 @@ void Editor::setCanAutoSave(bool newCanAutoSave)
     mCanAutoSave = newCanAutoSave;
 }
 
-void Editor::mousePressEvent(QMouseEvent *event)
-{
-    if ((event->modifiers() == Qt::ControlModifier)
-            && (event->button() == Qt::LeftButton)) {
-        event->accept();
-        return;
-    }
-    QSynedit::QSynEdit::mousePressEvent(event);
-}
-
 const QDateTime &Editor::hideTime() const
 {
     return mHideTime;
@@ -5115,17 +5103,34 @@ void Editor::reformat(bool doReparse)
 {
     if (readOnly())
         return;
-    if (!fileExists(pSettings->environment().AStylePath())) {
+    const QString &astyle = pSettings->environment().AStylePath();
+    if (!fileExists(astyle)) {
         QMessageBox::critical(this,
                               tr("astyle not found"),
-                              tr("Can't find astyle in \"%1\".").arg(pSettings->environment().AStylePath()));
+                              tr("Can't find astyle in \"%1\".").arg(astyle));
         return;
     }
     //we must remove all breakpoints and syntax issues
 //    onLinesDeleted(1,lineCount());
     QByteArray content = text().toUtf8();
     QStringList args = pSettings->codeFormatter().getArguments();
-    QByteArray newContent = reformatContentUsingAstyle(content,args);
+    QString command = escapeCommandForPlatformShell(extractFileName(astyle), args);
+    pMainWindow->logToolsOutput(tr("Reformatting content using astyle..."));
+    pMainWindow->logToolsOutput("------------------");
+    pMainWindow->logToolsOutput(tr("- Astyle: %1").arg(astyle));
+    pMainWindow->logToolsOutput(tr("- Command: %1").arg(command));
+    auto [newContent, astyleError, processError] =
+        runAndGetOutput(astyle, extractFileDir(astyle), args, content, true);
+    if (!astyleError.isEmpty()) {
+#ifdef Q_OS_WIN
+        QString msg = QString::fromLocal8Bit(astyleError);
+#else
+        QString msg = QString::fromUtf8(astyleError);
+#endif
+        pMainWindow->logToolsOutput(msg);
+    }
+    if (!processError.isEmpty())
+        pMainWindow->logToolsOutput(processError);
     if (newContent.isEmpty())
         return;
     replaceContent(QString::fromUtf8(newContent), doReparse);
